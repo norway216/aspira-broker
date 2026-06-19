@@ -1,0 +1,28 @@
+# Claude Code
+.claude/
+
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.so.*
+
+# Compiled binaries
+bt_trading
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Journal / runtime files
+/tmp/bt_journal.log
+*.core
+core
+
+# OS
+.DS_Store
+Thumbs.db
