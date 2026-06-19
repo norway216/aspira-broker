@@ -28,7 +28,7 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ── Source files ──────────────────────────────────────────────────────
 
-# C core modules (V4: added sequencer, hugepage, numa, slab_allocator)
+# C core modules (V5: added order_gate, event_bus, clearing)
 set(C_SOURCES
     utils/memory_pool.c
     utils/timer.c
@@ -40,6 +40,9 @@ set(C_SOURCES
     core/risk_engine.c
     core/oms.c
     core/sequencer.c
+    core/order_gate.c
+    core/event_bus.c
+    core/clearing.c
     net/gateway.c
     md/market_data.c
     persistence/journal.c

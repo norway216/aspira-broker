@@ -2,6 +2,9 @@
 #include "bt_config.h"
 #include "bt_queues.h"
 #include "bt_sequencer.h"
+#include "bt_event.h"
+#include "bt_clearing.h"
+#include "bt_order_gate.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
 #include "bt_memory_pool.h"
@@ -17,15 +20,22 @@
 #include <unistd.h>
 #include <pthread.h>
 
-/* ── V4 Pipeline Architecture ────────────────────────────────────────
+/* ── V5 Pipeline Architecture ────────────────────────────────────────
  *
- *  [Gateway]  →  [OMS]  →  [Risk Engine]  →  [Sequencer]  →  [Matching ×N]
- *     MPSC         MPSC          MPSC              MPSC            MPSC
- *                                                                    │
- *                                                        ┌───────────┘
- *                                                        ▼
- *                                                   [Market Data]
- *                                                       SPSC
+ *  [Gateway] → [OrderGate] → [OMS] → [Risk×2] → [Seq] → [Match×4]
+ *      MPSC        MPSC       MPSC      MPSC      MPSC     MPSC
+ *                                                             │
+ *                                                   ┌─────────┘
+ *                                                   ▼ SPSC
+ *                                              [Market Data]
+ *                                                   │
+ *                                          ┌────────┘
+ *                                          ▼
+ *                                     [Event Bus]  ← V5: event sourcing
+ *                                          │
+ *                               ┌──────────┼──────────┐
+ *                               ▼          ▼          ▼
+ *                          [Clearing] [Journal]  [Audit/Future]
  */
 
 /* ── Forward declarations ──────────────────────────────────────────── */
@@ -54,11 +64,12 @@ int  bt_risk_worker_start(bt_risk_worker_t *w);
 void bt_risk_worker_stop(bt_risk_worker_t *w);
 void bt_risk_worker_destroy(bt_risk_worker_t *w);
 
-/* Matching Engine */
+/* Matching Engine (V5: + event_bus parameter) */
 bt_matching_ctx_t *bt_matching_create(int tid, int cpu, bt_match_in_queue_t *in,
                                        bt_md_tick_queue_t *md,
                                        bt_mempool_arena_t *arena,
-                                       bt_journal_t *journal);
+                                       bt_journal_t *journal,
+                                       bt_event_bus_t *event_bus);
 int  bt_matching_start(bt_matching_ctx_t *ctx);
 void bt_matching_stop(bt_matching_ctx_t *ctx);
 void bt_matching_destroy(bt_matching_ctx_t *ctx);
@@ -83,28 +94,30 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
 static volatile int g_running = 1;
 
 static bt_mempool_t        g_mempool;
-static bt_journal_t       *g_journal = NULL;
+static bt_journal_t       *g_journal    = NULL;
+static bt_event_bus_t     *g_event_bus  = NULL;
 static bt_risk_state_t    *g_risk_state = NULL;
-static bt_sequencer_t     *g_sequencer = NULL;
+static bt_sequencer_t     *g_sequencer  = NULL;
+static bt_clearing_t      *g_clearing   = NULL;
 
-static bt_oms_ctx_t       *g_oms = NULL;
-static gw_ctx_t           *g_gateway = NULL;
+static bt_oms_ctx_t       *g_oms      = NULL;
+static gw_ctx_t           *g_gateway  = NULL;
+static bt_order_gate_t    *g_ordergate = NULL;
 static bt_risk_worker_t   *g_risk_workers[BT_CFG_RISK_THREADS];
 static bt_matching_ctx_t  *g_matchers[BT_CFG_MATCHING_THREADS];
 static bt_md_ctx_t        *g_md = NULL;
 
-/* ── Queues (V4 pipeline) ──────────────────────────────────────────── */
-static bt_gw_oms_queue_t    g_gw_oms_q;       /* Gateway → OMS */
-static bt_risk_in_queue_t   g_risk_in_q;       /* OMS → Risk (shared input) */
+/* ── Queues (V5 pipeline) ──────────────────────────────────────────── */
+static bt_gw_oms_queue_t    g_gate_out_q;      /* Gateway → Order Gate */
+static bt_gw_oms_queue_t    g_gate_oms_q;      /* Order Gate → OMS */
+static bt_risk_in_queue_t   g_risk_in_q;       /* OMS → Risk */
 static bt_seq_in_queue_t    g_seq_in_q;        /* Risk → Sequencer */
 static bt_match_in_queue_t  g_match_in_q[BT_CFG_MATCHING_THREADS]; /* Seq → Match */
 static bt_md_tick_queue_t   g_md_q[BT_CFG_MATCHING_THREADS];       /* Match → MD */
 
-static bt_runtime_config_t g_cfg;
-
-/* Heap-allocated pointer array for sequencer → matching shard routing.
- * Must outlive the scope where sequencer is started (accessed by sequencer thread). */
 static void *g_seq_out_queues[BT_CFG_MATCHING_THREADS];
+
+static bt_runtime_config_t g_cfg;
 
 /* ── Signal handler ────────────────────────────────────────────────── */
 static void sig_handler(int sig) { (void)sig; g_running = 0; }
@@ -112,10 +125,10 @@ static void sig_handler(int sig) { (void)sig; g_running = 0; }
 /* ── Print banner ──────────────────────────────────────────────────── */
 static void print_banner(void)
 {
-    printf("\n╔══════════════════════════════════════════════════════╗\n");
-    printf("║   Ultra High-Performance Trading System V4          ║\n");
-    printf("║   OMS → Risk → Sequencer → Matching → Market Data   ║\n");
-    printf("╚══════════════════════════════════════════════════════╝\n");
+    printf("\n╔══════════════════════════════════════════════════════════╗\n");
+    printf("║   Exchange-Grade Trading System V5                     ║\n");
+    printf("║   GW→Gate→OMS→Risk→Seq→Match→MD→EventBus→Clearing    ║\n");
+    printf("╚══════════════════════════════════════════════════════════╝\n");
     printf("  CPU cores: %d  NUMA nodes: %d\n", bt_cpu_count(), bt_numa_num_nodes());
     printf("  Memory pool: %zu MB\n", g_cfg.mempool_size_mb);
     printf("  Matching: %d  Risk: %d  IO: %d\n",
@@ -152,7 +165,7 @@ int main(int argc, char **argv)
 
     /* ── Memory pool ────────────────────────────────────────────────── */
     size_t pool_sz = g_cfg.mempool_size_mb * 1024UL * 1024UL;
-    int arenas = g_cfg.matching_threads + g_cfg.risk_threads + 3;
+    int arenas = g_cfg.matching_threads + g_cfg.risk_threads + 4;
     if (bt_mempool_init(&g_mempool, pool_sz, arenas, 1) < 0) {
         fprintf(stderr, "FATAL: memory pool init failed\n"); return 1;
     }
@@ -161,30 +174,43 @@ int main(int argc, char **argv)
     /* ── Journal ────────────────────────────────────────────────────── */
     g_journal = bt_journal_open(g_cfg.journal_path, g_cfg.journal_sync_ms);
 
-    /* ── Initialize V4 queues ───────────────────────────────────────── */
-    bt_queues_init_all_v4(&g_gw_oms_q, NULL, &g_risk_in_q, &g_seq_in_q,
-                           g_match_in_q, g_md_q, g_cfg.matching_threads);
+    /* ── V5 Event Bus ───────────────────────────────────────────────── */
+    g_event_bus = bt_event_bus_create(65536);
+
+    /* ── Initialize V5 queues ───────────────────────────────────────── */
+    BT_MPSC_QUEUE_INIT(g_gate_out_q);
+    BT_MPSC_QUEUE_INIT(g_gate_oms_q);
+    BT_MPSC_QUEUE_INIT(g_risk_in_q);
+    BT_MPSC_QUEUE_INIT(g_seq_in_q);
+    for (int i = 0; i < g_cfg.matching_threads; i++) {
+        BT_MPSC_QUEUE_INIT(g_match_in_q[i]);
+        BT_SPSC_QUEUE_INIT(g_md_q[i]);
+    }
 
     /* ── Risk state ─────────────────────────────────────────────────── */
     g_risk_state = bt_risk_state_create();
 
     /* ── Start subsystems (consumers first, downstream → upstream) ──── */
 
-    /* 1. Market Data */
+    /* 1. Clearing (V5: NEW — subscribes to event bus) */
+    g_clearing = bt_clearing_create(0, 13);
+    if (g_clearing) bt_clearing_start(g_clearing, g_event_bus);
+
+    /* 2. Market Data */
     g_md = bt_md_create(0, g_cfg.cpu_match_cores[3] + 1, &g_md_q[0]);
     if (g_md) bt_md_start(g_md);
 
-    /* 2. Matching Engines (V4: receive from Sequencer via MPSC) */
+    /* 3. Matching Engines (V5: + event_bus) */
     for (int i = 0; i < g_cfg.matching_threads; i++) {
         bt_mempool_arena_t *arena = bt_mempool_assign_arena(&g_mempool);
         g_matchers[i] = bt_matching_create(i, g_cfg.cpu_match_cores[i],
                                             &g_match_in_q[i], &g_md_q[i],
-                                            arena, g_journal);
+                                            arena, g_journal, g_event_bus);
         if (g_matchers[i]) bt_matching_start(g_matchers[i]);
     }
 
-    /* 3. Sequencer (V4: NEW — between Risk and Matching) */
-    g_sequencer = bt_sequencer_create(0, 11); /* dedicated core */
+    /* 4. Sequencer */
+    g_sequencer = bt_sequencer_create(0, 11);
     if (g_sequencer) {
         for (int i = 0; i < g_cfg.matching_threads; i++)
             g_seq_out_queues[i] = &g_match_in_q[i];
@@ -192,7 +218,7 @@ int main(int argc, char **argv)
                            g_cfg.matching_threads);
     }
 
-    /* 4. Risk Workers (V4: output to Sequencer, not directly to Match) */
+    /* 5. Risk Workers */
     for (int i = 0; i < g_cfg.risk_threads; i++) {
         g_risk_workers[i] = bt_risk_worker_create(i, g_cfg.cpu_risk_cores[i],
                                                    &g_risk_in_q, &g_seq_in_q,
@@ -201,21 +227,30 @@ int main(int argc, char **argv)
         if (g_risk_workers[i]) bt_risk_worker_start(g_risk_workers[i]);
     }
 
-    /* 5. OMS */
-    g_oms = bt_oms_create(0, g_cfg.cpu_risk_cores[0] - 1, &g_gw_oms_q, &g_risk_in_q);
+    /* 6. OMS */
+    g_oms = bt_oms_create(0, g_cfg.cpu_risk_cores[0] - 1, &g_gate_oms_q, &g_risk_in_q);
     if (g_oms) bt_oms_start(g_oms);
 
-    /* 6. Gateway */
+    /* 7. Order Gate (V5: NEW — between Gateway and OMS) */
+    g_ordergate = bt_order_gate_create(0, 2);
+    if (g_ordergate) {
+        bt_order_gate_start(g_ordergate, &g_gate_out_q, &g_gate_oms_q,
+                            BT_CFG_OMS_QUEUE_CAP);
+    }
+
+    /* 8. Gateway (V5: outputs to Order Gate, not directly to OMS) */
     g_gateway = bt_gateway_create(0, g_cfg.cpu_io_cores[0], g_cfg.gateway_port,
-                                   g_cfg.max_connections, &g_gw_oms_q);
+                                   g_cfg.max_connections, &g_gate_out_q);
     if (g_gateway) bt_gateway_start(g_gateway);
 
-    BT_LOG_INFO("V4 pipeline started: GW→OMS→Risk→Seq→Match×%d→MD", g_cfg.matching_threads);
+    BT_LOG_INFO("V5 pipeline: GW→Gate→OMS→Risk→Seq→Match×%d→MD→EventBus→Clearing",
+                 g_cfg.matching_threads);
 
-    /* ── Benchmark ──────────────────────────────────────────────────── */
+    /* ── Benchmark (publishes directly to Order Gate input) ─────────── */
     if (g_cfg.run_benchmark) {
         usleep(100000);
-        bt_benchmark_run(g_cfg.benchmark_orders, g_cfg.benchmark_symbols, &g_gw_oms_q);
+        bt_benchmark_run(g_cfg.benchmark_orders, g_cfg.benchmark_symbols,
+                          &g_gate_out_q);
     }
 
     /* ── Main wait loop ─────────────────────────────────────────────── */
@@ -226,13 +261,19 @@ int main(int argc, char **argv)
 
         uint64_t now = bt_timer_now_ns();
         if (now - last_health > 5000000000UL) {
-            uint64_t jw = 0, jd = 0;
-            if (g_journal) bt_journal_stats(g_journal, &jw, &jd);
-            uint64_t seq_orders = 0, seq_global = 0;
-            bt_sequencer_stats(g_sequencer, &seq_orders, &seq_global);
+            uint64_t jw = 0, jd = 0, seq_orders = 0, seq_global = 0;
+            uint64_t ev_pub = 0, ev_del = 0;
+            uint64_t clr_trades = 0, clr_ledger = 0;
+            double   clr_notional = 0;
 
-            BT_LOG_INFO("Health: journal w=%lu d=%lu seq_global=%lu seq_proc=%lu",
-                         jw, jd, seq_global, seq_orders);
+            if (g_journal)   bt_journal_stats(g_journal, &jw, &jd);
+            bt_sequencer_stats(g_sequencer, &seq_orders, &seq_global);
+            bt_event_bus_stats(g_event_bus, &ev_pub, &ev_del);
+            bt_clearing_stats(g_clearing, &clr_trades, &clr_notional, &clr_ledger);
+
+            BT_LOG_INFO("V5: j_w=%lu seq=%lu/%lu ev=%lu/%lu clr=%lu/%.0f ledger=%lu",
+                         jw, seq_orders, seq_global, ev_pub, ev_del,
+                         clr_trades, clr_notional, clr_ledger);
             bt_log_flush();
             last_health = now;
         }
@@ -241,30 +282,35 @@ int main(int argc, char **argv)
     /* ── Graceful shutdown (upstream first) ─────────────────────────── */
     BT_LOG_INFO("Shutting down..."); bt_log_flush();
 
-    if (g_gateway)     bt_gateway_stop(g_gateway);
-    if (g_oms)         bt_oms_stop(g_oms);
+    if (g_gateway)   bt_gateway_stop(g_gateway);
+    if (g_ordergate) bt_order_gate_stop(g_ordergate);
+    if (g_oms)       bt_oms_stop(g_oms);
     for (int i = 0; i < g_cfg.risk_threads; i++)
         if (g_risk_workers[i]) bt_risk_worker_stop(g_risk_workers[i]);
-    if (g_sequencer)   bt_sequencer_stop(g_sequencer);
+    if (g_sequencer) bt_sequencer_stop(g_sequencer);
     for (int i = 0; i < g_cfg.matching_threads; i++)
         if (g_matchers[i]) bt_matching_stop(g_matchers[i]);
-    if (g_md)          bt_md_stop(g_md);
+    if (g_md)        bt_md_stop(g_md);
+    if (g_clearing)  bt_clearing_stop(g_clearing);
 
     if (g_journal) { bt_journal_flush(g_journal); bt_journal_close(g_journal); }
 
-    if (g_gateway)     bt_gateway_destroy(g_gateway);
-    if (g_oms)         bt_oms_destroy(g_oms);
+    if (g_gateway)   bt_gateway_destroy(g_gateway);
+    if (g_ordergate) bt_order_gate_destroy(g_ordergate);
+    if (g_oms)       bt_oms_destroy(g_oms);
     for (int i = 0; i < g_cfg.risk_threads; i++)
         if (g_risk_workers[i]) bt_risk_worker_destroy(g_risk_workers[i]);
-    if (g_sequencer)   bt_sequencer_destroy(g_sequencer);
+    if (g_sequencer) bt_sequencer_destroy(g_sequencer);
     for (int i = 0; i < g_cfg.matching_threads; i++)
         if (g_matchers[i]) bt_matching_destroy(g_matchers[i]);
-    if (g_md)          bt_md_destroy(g_md);
+    if (g_md)        bt_md_destroy(g_md);
+    if (g_clearing)  bt_clearing_destroy(g_clearing);
 
+    if (g_event_bus) bt_event_bus_destroy(g_event_bus);
     if (g_risk_state) bt_risk_state_destroy(g_risk_state);
     bt_mempool_destroy(&g_mempool);
     bt_log_flush();
 
-    printf("V4 Shutdown complete.\n");
+    printf("V5 Shutdown complete.\n");
     return 0;
 }
