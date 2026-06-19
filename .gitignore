@@ -10,6 +10,7 @@ build/
 
 # Compiled binaries
 bt_trading
+test/test_trading
 
 # Benchmark output (the binary stays in build/)
 bench/*.o
