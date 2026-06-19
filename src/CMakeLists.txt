@@ -43,6 +43,8 @@ set(C_SOURCES
     core/order_gate.c
     core/event_bus.c
     core/clearing.c
+    core/shard_ipc.c
+    utils/memory_tier.c
     net/gateway.c
     md/market_data.c
     persistence/journal.c
