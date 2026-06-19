@@ -28,19 +28,23 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ── Source files ──────────────────────────────────────────────────────
 
-# C core modules
+# C core modules (V4: added sequencer, hugepage, numa, slab_allocator)
 set(C_SOURCES
     utils/memory_pool.c
     utils/timer.c
     utils/cpu_affinity.c
     utils/logger.c
+    utils/hugepage.c
+    utils/numa.c
+    utils/slab_allocator.c
     core/risk_engine.c
     core/oms.c
+    core/sequencer.c
     net/gateway.c
     md/market_data.c
     persistence/journal.c
     ipc/shmem.c
-    benchmark.c
+    ${CMAKE_SOURCE_DIR}/../bench/benchmark.c
 )
 
 # C++ core modules
