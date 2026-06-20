@@ -8,6 +8,15 @@
 extern "C" {
 #endif
 
+/* ── CPU pause hint (portable across architectures) ─────────────────── */
+#if defined(__x86_64__) || defined(__i386__)
+#define BT_CPU_PAUSE() __builtin_ia32_pause()
+#elif defined(__aarch64__)
+#define BT_CPU_PAUSE() __asm__ volatile("yield" ::: "memory")
+#else
+#define BT_CPU_PAUSE() /* no-op on unknown arch */
+#endif
+
 /* ── CPU Affinity & Thread Management ───────────────────────────────── */
 
 /**

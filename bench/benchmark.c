@@ -41,19 +41,23 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
         base_prices[i] = 100.0 + (double)(xorshift64() % 90000) / 100.0;
     }
 
-    /* Latency tracking */
-    uint64_t *latencies = (uint64_t *)malloc(num_orders * sizeof(uint64_t));
-    if (!latencies) { fprintf(stderr, "[bench] malloc failed\n"); return; }
-    int latency_count = 0;
+    /* Latency tracking: measure intervals between successive pushes.
+     * These are INJECTION-side metrics — the time it takes to generate
+     * and push an order into the queue, NOT end-to-end system latency.
+     * End-to-end latency requires response timestamps from the pipeline. */
+    uint64_t *intervals_ns = (uint64_t *)malloc((size_t)num_orders * sizeof(uint64_t));
+    if (!intervals_ns) { fprintf(stderr, "[bench] malloc failed\n"); return; }
+    int interval_count = 0;
 
     bt_latency_stats_t stats;
     bt_latency_stats_init(&stats);
 
     printf("\n[bench] %d orders, %d symbols\n", num_orders, sym_count);
 
-    uint64_t bench_start = bt_timer_now_ns();
-    uint64_t last_report = bench_start;
-    uint64_t last_count  = 0;
+    uint64_t bench_start   = bt_timer_now_ns();
+    uint64_t last_report   = bench_start;
+    uint64_t last_push_ns  = bench_start;  /* timestamp of previous successful push */
+    uint64_t last_count    = 0;
     int orders_sent = 0, orders_dropped = 0;
 
     for (int i = 0; i < num_orders; i++) {
@@ -92,7 +96,11 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
 
         if (BT_MPSC_PUSH(*queue, msg)) {
             orders_sent++;
-            if (latency_count < num_orders) latencies[latency_count++] = send_ts;
+            /* Record inter-push interval (time since last successful push) */
+            uint64_t interval = send_ts - last_push_ns;
+            intervals_ns[interval_count++] = interval;
+            bt_latency_stats_record(&stats, interval);
+            last_push_ns = send_ts;
         } else {
             orders_dropped++;
             struct timespec ts = {0, 100};
@@ -115,32 +123,24 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
     printf("[bench] Elapsed: %.3f sec  Throughput: %.0f orders/sec\n",
            elapsed, (double)orders_sent / elapsed);
 
-    if (latency_count > 0) {
-        uint64_t *lat_ns = (uint64_t *)malloc(latency_count * sizeof(uint64_t));
-        if (lat_ns) {
-            for (int i = 0; i < latency_count; i++) {
-                /* latencies[i] is in ns, bench_start is in ns */
-                uint64_t delta_ns = latencies[i] - bench_start;
-                lat_ns[i] = delta_ns;
-                bt_latency_stats_record(&stats, lat_ns[i]);
-            }
+    /* Print injection-interval percentiles (NOT end-to-end latency) */
+    if (interval_count > 1) {
+        qsort(intervals_ns, (size_t)interval_count, sizeof(uint64_t), cmp_u64);
 
-            qsort(lat_ns, latency_count, sizeof(uint64_t), cmp_u64);
+        double p50, p95, p99, p999;
+        bt_latency_percentiles(intervals_ns, (size_t)interval_count, &p50, &p95, &p99, &p999);
 
-            double p50, p95, p99, p999;
-            bt_latency_percentiles(lat_ns, latency_count, &p50, &p95, &p99, &p999);
+        printf("\n[bench] Injection Interval (time between successive pushes):\n");
+        printf("  p50:   %.0f ns (%.3f μs)\n", p50, p50/1000.0);
+        printf("  p95:   %.0f ns (%.3f μs)\n", p95, p95/1000.0);
+        printf("  p99:   %.0f ns (%.3f μs)\n", p99, p99/1000.0);
+        printf("  p99.9: %.0f ns (%.3f μs)\n", p999, p999/1000.0);
 
-            printf("\n[bench] Injection Latency:\n");
-            printf("  p50:   %.0f ns (%.3f μs)\n", p50, p50/1000.0);
-            printf("  p95:   %.0f ns (%.3f μs)\n", p95, p95/1000.0);
-            printf("  p99:   %.0f ns (%.3f μs)\n", p99, p99/1000.0);
-            printf("  p99.9: %.0f ns (%.3f μs)\n", p999, p999/1000.0);
-
-            bt_latency_stats_print(&stats, "Injection timing");
-            free(lat_ns);
-        }
+        bt_latency_stats_print(&stats, "Injection interval");
+    } else {
+        printf("\n[bench] (too few successful pushes for interval stats)\n");
     }
-    free(latencies);
+    free(intervals_ns);
     free(symbols);
     free(base_prices);
 }

@@ -3,6 +3,7 @@
 #include "bt_timer.h"
 #include "bt_cpu.h"
 #include "bt_config.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,7 @@ struct bt_journal {
     int                fd;
     bt_journal_ring   *ring;
     pthread_t          thread;
-    volatile int       running;
+    atomic_int          running;
     _Atomic uint64_t   written;
     _Atomic uint64_t   dropped;
 };
@@ -51,7 +52,7 @@ static void *bt_journal_thread_core(void *arg)
 
     fprintf(stderr, "[journal] started, writing to %s\n", j->path);
 
-    while (j->running) {
+    while (atomic_load(&j->running)) {
         bt_journal_entry_t entry;
         if (BT_SPSC_POP(*j->ring, &entry)) {
             /* Serialize entry to write buffer */
@@ -79,7 +80,7 @@ static void *bt_journal_thread_core(void *arg)
                     last_sync = now;
                 }
             }
-            __builtin_ia32_pause();
+            BT_CPU_PAUSE();
         }
     }
 
@@ -122,7 +123,7 @@ bt_journal_t *bt_journal_open(const char *path, int sync_interval_ms)
 
     atomic_init(&j->written, 0);
     atomic_init(&j->dropped, 0);
-    j->running = 1;
+    atomic_init(&j->running, 1);
 
     if (pthread_create(&j->thread, NULL, bt_journal_thread_core, j) != 0) {
         close(j->fd);
@@ -153,7 +154,7 @@ void bt_journal_flush(bt_journal_t *j)
 void bt_journal_close(bt_journal_t *j)
 {
     if (!j) return;
-    j->running = 0;
+    atomic_store(&j->running, 0);
     pthread_join(j->thread, NULL);
     close(j->fd);
     free(j->ring);

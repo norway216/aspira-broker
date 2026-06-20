@@ -9,8 +9,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optimization flags
-set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -ffast-math -funroll-loops")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -ffast-math -funroll-loops")
+# NOTE: -ffast-math is intentionally NOT used — this is a financial system
+# and IEEE 754 compliance is required for correct price calculations.
+# -ffast-math breaks NaN/Inf handling, changes comparison semantics, and
+# can reorder floating-point operations in ways that produce wrong prices.
+set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -funroll-loops")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -funroll-loops")
 
 # Common flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers")

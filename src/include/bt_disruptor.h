@@ -70,8 +70,54 @@ static inline size_t bt_disruptor_claim(void *queue_ptr)
     return 0; /* placeholder */
 }
 
-/* The C Disruptor API requires knowledge of the queue layout.
+/* ── C Disruptor Claim (fixed placeholder) ──────────────────────────
+ * Uses the generic layout: cursor, committed[N], buffer[N].
+ * The mask is computed from queue capacity N.
  * For production use, prefer the C++ template below which is type-safe. */
+static inline size_t bt_disruptor_claim_c(void *queue_ptr, size_t capacity)
+{
+    struct generic_d {
+        _Atomic size_t cursor;
+        char _pad1[BT_CACHE_LINE_SIZE];
+        _Atomic size_t committed[];
+    };
+    struct generic_d *q = (struct generic_d *)queue_ptr;
+    size_t mask = capacity - 1;
+    size_t seq = atomic_load_explicit(&q->cursor, memory_order_relaxed);
+    size_t next, wrap_point;
+
+    do {
+        seq  = atomic_load_explicit(&q->cursor, memory_order_relaxed);
+        next = seq + 1;
+        wrap_point = next - capacity;
+
+        if (atomic_load_explicit(&q->committed[wrap_point & mask],
+                                  memory_order_acquire) != (size_t)(-1) &&
+            atomic_load_explicit(&q->committed[wrap_point & mask],
+                                  memory_order_acquire) <= wrap_point) {
+            return (size_t)(-1); /* ring full */
+        }
+    } while (!atomic_compare_exchange_weak_explicit(
+                 &q->cursor, &seq, next,
+                 memory_order_release, memory_order_relaxed));
+    return seq;
+}
+
+static inline void bt_disruptor_commit_c(void *queue_ptr, size_t seq,
+                                          size_t capacity)
+{
+    struct generic_d {
+        _Atomic size_t cursor;
+        char _pad1[BT_CACHE_LINE_SIZE];
+        _Atomic size_t committed[];
+    };
+    struct generic_d *q = (struct generic_d *)queue_ptr;
+    size_t mask = capacity - 1;
+    atomic_store_explicit(&q->committed[seq & mask], seq,
+                           memory_order_release);
+}
+
+/* The C++ template below is type-safe and preferred for production use. */
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -35,6 +35,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <sys/socket.h>
 
 /* ── Test Configuration ────────────────────────────────────────────── */
 #define DEFAULT_HOST    "127.0.0.1"
@@ -77,24 +78,31 @@ static uint64_t now_ns(void)
 /* ── Network helpers ───────────────────────────────────────────────── */
 static int tcp_connect(const char *host, int port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { perror("socket"); return -1; }
+    /* Use getaddrinfo (POSIX.1-2001) instead of deprecated gethostbyname */
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    int gai_err = getaddrinfo(host, port_str, &hints, &res);
+    if (gai_err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(gai_err));
+        return -1;
+    }
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { perror("socket"); freeaddrinfo(res); return -1; }
 
     int opt = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
 
-    struct hostent *he = gethostbyname(host);
-    if (!he) { fprintf(stderr, "gethostbyname failed\n"); close(fd); return -1; }
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons((uint16_t)port);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], (size_t)he->h_length);
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("connect"); close(fd); return -1;
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        perror("connect"); close(fd); freeaddrinfo(res); return -1;
     }
+    freeaddrinfo(res);
     return fd;
 }
 
