@@ -104,6 +104,16 @@ int bt_event_bus_subscribe(bt_event_bus_t *bus, uint32_t type_mask,
                             bt_event_handler_t handler, void *user_data);
 
 /**
+ * Unsubscribe a previously registered handler.
+ * Safe to call from any thread — the handler will not be invoked
+ * after this call returns.
+ * @param bus        Event bus
+ * @param handler_id Handler ID returned by bt_event_bus_subscribe
+ * @return 0 on success, -1 if invalid ID
+ */
+int bt_event_bus_unsubscribe(bt_event_bus_t *bus, int handler_id);
+
+/**
  * Publish an event to all registered handlers.
  * Non-blocking: returns immediately, handlers are called synchronously.
  * @return Number of handlers that received the event

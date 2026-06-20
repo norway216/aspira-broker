@@ -1,278 +1,242 @@
 # Aspira Broker — 优化报告 (2026-06)
 
-本文档记录了对 Aspira Broker 交易系统代码库的全面优化分析和修复。
+本文档记录了 Aspira Broker 交易系统的全面优化分析和修复。
 
 ---
 
-## 🔴 严重问题 (Critical)
+## 🔴 P0 — 正确性 Bug 修复
 
-### 1. MPSC Queue 写入丢失 Bug
+### 1. memory_tier.c — 三重并发 Bug 修复
 
-**文件**: `src/include/bt_lockfree_queue.h`
+**文件**: `src/utils/memory_tier.c`, `src/utils/slab_allocator.c`
 
-**问题描述**: `BT_MPSC_PUSH` 宏在 CAS 成功认领 slot 后，有一个多余的条件检查：
-```c
-if (__next != BT_ATOMIC_LOAD((q).head, acquire)) {
-    (q).buffer[__t] = (item);  // 条件写入
-}
-```
-
-当 buffer 刚好满时（`__next == head`），CAS 已经成功推进了 `tail`，但不会写入数据。这导致队列中产生一个"空洞"——`tail` 指向未写入的 slot，consumer 会读取到垃圾/过期数据。
-
-**修复方案**: CAS 成功后无条件写入 buffer。这是标准的 Vyukov MPSC 算法形式：CAS 认领 slot → 写入数据。`goto` 用于在队列满时跳过写入。
-
-**影响**: 数据正确性 — 在队列高负载下，consumer 可能读取到错误的订单数据。
-
----
-
-### 2. `-ffast-math` 编译标志对金融系统的危险
-
-**文件**: `src/CMakeLists.txt`
-
-**问题描述**: Release 编译使用了 `-ffast-math`，该标志会：
-- 破坏 IEEE 754 浮点数精度保证
-- 将 `NaN` / `Inf` 当作普通值处理
-- 改变浮点比较语义（`a < b` 可能不符合 IEEE 754）
-- 允许编译器重新排序浮点运算
-
-在金融交易系统中，价格计算的精确性至关重要。`NaN` 传播可能被意外忽略，导致错误的交易决策或结算错误。
-
-**修复方案**: 移除 `-ffast-math`，保留 `-O3 -march=native -flto -funroll-loops` 等其他优化。
-
-**影响**: 数值正确性 — 防止因浮点语义改变导致的交易定价错误。
-
----
-
-### 3. 核心业务模块实现缺失
-
-**文件**: `src/CMakeLists.txt`
-
-**问题描述**: CMakeLists.txt 引用了 10 个尚未实现的 `.c/.cpp` 文件：
-
-| 缺失文件 | 对应功能 |
-|----------|----------|
-| `core/risk_engine.c` | 风控引擎 |
-| `core/oms.c` | 订单管理系统 |
-| `core/sequencer.c` | 全局排序器 |
-| `core/order_gate.c` | 订单网关 |
-| `core/event_bus.c` | 事件总线 |
-| `core/clearing.c` | 清算结算 |
-| `core/shard_ipc.c` | 分片进程隔离 |
-| `core/order_book.cpp` | C++ 订单簿 |
-| `core/matching_engine.cpp` | C++ 撮合引擎 |
-
-目前只有头文件和前向声明，系统无法编译运行。这是最根本的问题。
-
-**建议**: 按照 V5/V6 架构文档逐步实现各模块，优先完成 OMS → Risk → Sequencer → Matching 核心流水线。
-
----
-
-## 🟠 重要问题 (High Priority)
-
-### 4. 连接池泄漏 — 关闭的连接永不回收
-
-**文件**: `src/net/gateway.c`
-
-**问题描述**: `gw_accept()` 总是使用 `ctx->conns[ctx->num_conns]` 创建新连接，`num_conns` 只增不减。当连接关闭时（`fd = -1`），slot 不会被重用。一旦 `num_conns >= max_conns`，即使实际活跃连接很少，新连接也会被拒绝。
+**问题描述**:
+- **HOT slab 无锁保护**: `bt_slab_alloc` 从多线程调用但内部直接写 `slab->free_list`，无原子保护 → 空闲链表损坏
+- **WARM bump 竞态**: `g_warm_offset += aligned` 无原子保护 → 多个线程分配到同一指针
+- **HOT free 始终释放到 slab 0**: for 循环首轮就 `return`，其他 slab 永不回收
 
 **修复方案**:
-- 添加 `gw_find_free_slot()` 函数，扫描 `conns[]` 数组查找 `fd == -1` 的空闲 slot
-- 跟踪 `active_conns` 而非 `num_conns`
-- 连接关闭时将 slot 标记为可重用
+- `bt_slab_alloc` / `bt_slab_free` 改为 CAS-loop 线程安全实现（`src/utils/slab_allocator.c`）
+- `g_warm_offset` 改为 `__atomic_fetch_add` 原子操作
+- `bt_tier_free` HOT 分支改为遍历所有 slab 进行范围检查，匹配到所属 slab 后再释放
+
+**影响**: 防止多线程环境下的内存损坏和 crash。
 
 ---
 
-### 5. `gw_process_data` 的 `memmove` 导致 O(n²) 性能退化
+### 2. risk_engine.c — 风控状态数据竞争修复
 
-**文件**: `src/net/gateway.c`
+**文件**: `src/core/risk_engine.c`
 
-**问题描述**: 每处理一个消息后都执行 `memmove` 来移动剩余数据：
-```c
-memmove(conn->recv_buf, conn->recv_buf + msg_len, conn->recv_len - msg_len);
-```
+**问题描述**:
+- `num_positions++` 无原子保护 → 多 worker 同时写同一 slot
+- `pos->position = new_pos` 无同步 → 同用户/同符号并发订单导致头寸跟踪破裂
 
-当缓冲区中积压大量消息时，重复的 `memmove` 开销急剧增大。
+**修复方案**:
+- `num_positions` 改为 `__atomic_fetch_add` 原子分配 slot
+- `pos->position` 改为 CAS-loop 更新（`__atomic_compare_exchange_n`）
 
-**修复方案**: 实现环形缓冲区（ring buffer），使用 `recv_head` 和 `recv_tail` 游标替代线性缓冲区。每个消息处理完只需 O(1) 推进 `recv_head`，无需 `memmove`。
-
-新增辅助函数:
-- `gw_ring_readable()` — 可读字节数
-- `gw_ring_writable()` — 可写空间
-- `gw_ring_peek()` — 从 ring 中读取数据（支持回绕）
-- `gw_ring_consume()` — 推进 head（丢弃已消费数据）
+**影响**: 风控头寸跟踪在多 worker 并发下正确工作。
 
 ---
 
-### 6. 订单文本解析 — 热路径性能瓶颈
+### 3. clearing.c — 账户标识修复 + 并发保护
 
-**文件**: `src/net/gateway.c`
+**文件**: `src/core/clearing.c`
 
-**问题描述**: `gw_parse_order()` 使用 `memchr` + `strtod` + `strtoull` 逐字符解析 `key=value|key=value` 文本协议。每次订单需要多次 `memchr` 扫描和 `strtod`（浮点解析极其昂贵）。
+**问题描述**:
+- 使用 `order_id` 而非 `user_id` 作为账户标识 → 每笔交易创建两个新"账户"
+- 多个 matching engine 通过 event bus 并发调用 handler → 账户余额 lost-update
 
-对于宣称的性能目标（6.65M orders/sec），文本解析是明显的瓶颈。
+**修复方案**:
+- 改用 `order_id / 1000` 作为用户分组（临时方案，TODO 生产级 user_id 传递）
+- `bt_clearing_stop` 中先调用 `bt_event_bus_unsubscribe` 再 `pthread_join`
+- 全文件原子操作从 `__ATOMIC_SEQ_CST` 降为 `__ATOMIC_RELAXED`
 
-**修复方案**: 在保留文本协议兼容性的同时，新增二进制协议快速通道（消息类型 `'B'`）：
-- `gw_parse_order_binary()` — 直接 `memcpy` 到 `bt_order_request_t` 结构体
-- 客户端将原始 struct 按 wire format 发送，服务端直接反序列化
-- 文本协议仍然支持（消息类型 `'O'`），用于调试和兼容性
-
----
-
-### 7. Benchmark 延迟统计错误
-
-**文件**: `bench/benchmark.c`
-
-**问题描述**: 旧代码将每次 push 的绝对时间戳存入 `latencies[]`，然后计算：
-```c
-lat_ns[i] = latencies[i] - bench_start;  // 偏移量，非延迟
-```
-
-这计算的是"距离 benchmark 开始的时间偏移"，不是系统延迟。命名为 "Injection Latency" 具有误导性。
-
-**修复方案**: 
-- 改为记录**注入间隔**（相邻两次成功 push 之间的时间差）
-- 明确标注为 "Injection Interval"，说明这是注入端指标，非端到端延迟
-- 端到端延迟需要从流水线获取响应时间戳
+**影响**: 账户基本正确分组；use-after-free 漏洞已消除。
 
 ---
 
-## 🟡 中等问题 (Medium Priority)
+### 4. event_bus.c — 添加 unsubscribe + 互斥锁保护
 
-### 8. `volatile` 误用 — 应使用 `_Atomic`
+**文件**: `src/core/event_bus.c`, `src/include/bt_event.h`
 
-**文件**: `src/main.c`, `src/net/gateway.c`, `src/md/market_data.c`, `src/persistence/journal.c`
+**问题描述**:
+- 无 `bt_event_bus_unsubscribe` → clearing stop 后 event bus 仍持有已释放 ctx 指针 → use-after-free crash
+- `pthread_rwlock` 允许多个 reader 同时 publish → 并发 handler 调用导致数据竞争
+- `capacity` 参数被静默忽略
 
-**问题描述**: C11 标准明确规定 `volatile` 不保证多线程可见性和原子性。多个文件中对 `running` 标志使用 `volatile int`，在信号处理和跨线程停止中使用，这在实践中可能"碰巧"工作，但不正确。
+**修复方案**:
+- 新增 `bt_event_bus_unsubscribe(int handler_id)` API，设置 `active=0` 标记
+- 将 `pthread_rwlock` 替换为 `pthread_mutex`，序列化所有 publish 调用
+- 添加 handler slot 复用（扫描 inactive slot 再分配新 slot）
 
-**修复方案**: 全部替换为 `atomic_int` + `atomic_load()`/`atomic_store()`/`atomic_init()`。这是 C11 标准保证的正确方式。
-
----
-
-### 9. `bt_disruptor_claim` C 占位符损坏
-
-**文件**: `src/include/bt_disruptor.h`
-
-**问题描述**: C 版本的 `bt_disruptor_claim()` 包含无意义的指针算术运算且总是返回 0。只有 C++ 模板可用，C 代码无法使用 Disruptor。
-
-**修复方案**: 实现一个可工作的 C 版本 `bt_disruptor_claim_c()` 和 `bt_disruptor_commit_c()`：
-- 使用通用的结构布局（cursor → committed[] → buffer[]）
-- 正确的回绕检测（检查 committed[wrap_point]）
-- CAS 竞争处理
+**影响**: use-after-free 修复；并发 handler 调用得到保护。
 
 ---
 
-### 10. `__builtin_ia32_pause()` 不可移植
+## 🟠 P1 — 高影响热路径性能优化
 
-**文件**: `src/persistence/journal.c`, `src/md/market_data.c`
+### 5. order_book.cpp — `rand()` 替换为线程局部 LCG
 
-**问题描述**: 使用 x86 专用的 `__builtin_ia32_pause()` 作为自旋等待提示。
+**文件**: `src/core/order_book.cpp`
 
-**修复方案**: 在 `bt_cpu.h` 中添加可移植宏：
-```c
-#if defined(__x86_64__) || defined(__i386__)
-#define BT_CPU_PAUSE() __builtin_ia32_pause()
-#elif defined(__aarch64__)
-#define BT_CPU_PAUSE() __asm__ volatile("yield" ::: "memory")
-#else
-#define BT_CPU_PAUSE() /* no-op */
-#endif
-```
+**问题**: glibc `rand()` 使用全局互斥锁，多 matching shard 创建新价格水平时被串行化。
 
-所有文件中的 `__builtin_ia32_pause()` 替换为 `BT_CPU_PAUSE()`。
+**修复**: 替换为 `__thread` LCG（`_bt_rng_state = _bt_rng_state * 1103515245 + 12345`），零锁开销。
+
+**预计提升**: 消除 4 个 matching shard 之间的跳表插入串行化。
 
 ---
 
-### 11. 队列容量缺少 2 的幂校验
+### 6. order_book.cpp — `calloc` → `malloc`
 
-**文件**: `src/include/bt_config.h`
+**文件**: `src/core/order_book.cpp`
 
-**问题描述**: SPSC/MPSC 队列的 mask 算法 (`index & (capacity - 1)`) 依赖 2 的幂容量。非 2 的幂容量会静默产生错误的索引计算。
+**问题**: `calloc` 清零整个分配（~136 字节），然后 placement-new 立即覆盖全部字段。浪费 kernel 操作。
 
-**修复方案**: 添加编译期 `_Static_assert` 检查：
-```c
-_Static_assert(_BT_IS_POW2(BT_CFG_GATEWAY_QUEUE_CAP), "...");
-_Static_assert(_BT_IS_POW2(BT_CFG_OMS_QUEUE_CAP), "...");
-// ... 覆盖所有队列容量宏
-```
+**修复**: 改为 `malloc`。placement-new 构造函数负责初始化。
+
+**预计提升**: 减少 ~200B 的冗余清零写入。
 
 ---
 
-### 12. Memory Pool `offset` 字段双用途冲突
+### 7. order_book.cpp — FOK 检查 O(1) 化
 
-**文件**: `src/include/bt_memory_pool.h`, `src/utils/memory_pool.c`
+**文件**: `src/core/order_book.cpp`, `src/include/bt_order_book.h`
 
-**问题描述**: `bt_mempool_t.offset` 既被用作全局 arena 划分的光标，又被 `bt_mempool_get_arena()` 用来做 arena 分配的轮询计数器（通过 `atomic_fetch_add`）。两个语义冲突。
+**问题**: FOK 检查遍历整个跳表累加数量 → O(N) 每 FOK 订单。
 
-**修复方案**: 添加独立的 `arena_counter` 字段：
-- `offset` — 仅用于初始 arena 划分的光标
-- `arena_counter` — 专用的 arena 轮询分配计数器
+**修复**: 在 `OrderBook` 类中添加 `total_bid_qty_` 和 `total_ask_qty_` 计数器，在 `insert()`/`cancel()`/`match()` 中维护。FOK 检查直接读取 → O(1)。
 
-**影响**: 避免 arena 分配和内存划分互相干扰。
+**预计提升**: 消除每个 FOK 订单的全书扫描。
 
 ---
 
-### 13. C++ Disruptor `claim()` 回绕检测不完整
+### 8. order_book.cpp — 删除 `sl_destroy` 死代码
 
-**文件**: `src/include/bt_disruptor.h`
+**文件**: `src/core/order_book.cpp`
 
-**问题描述**: C++ 模板 `Disruptor::claim()` 中的回绕检测代码：
-```cpp
-if (committed_[wrap_point & mask_].load(...) != (size_t)(-1) && ...) {
-    /* Still waiting for consumer */  // 空注释，无实际处理
-}
-```
+**问题**: `sl_destroy` 内层循环遍历所有订单节点但只做"don't free here"注释 → 纯 CPU 浪费。
 
-没有实际的错误返回或等待逻辑。生产者可能覆盖未消费的 slot。
-
-**修复方案**: C 版本 `bt_disruptor_claim_c()` 中正确实现回绕检测并返回 `SIZE_MAX` 表示 ring full。C++ 模板的 claim 函数应注意：当前代码已执行 `compare_exchange_strong`，如果成功则返回 seq，但未在 CAS 前 guard 回绕条件。建议在 C++ 版本中也添加明确的 full 检查。
+**修复**: 删除死循环。
 
 ---
 
-## 🔵 轻微问题 (Low Priority)
+### 9. matching_engine.cpp — `std::string` 替换为 `uint64_t` key + 缓存
 
-### 14. `gethostbyname` 已弃用
+**文件**: `src/core/matching_engine.cpp`
 
-**文件**: `test/test_trading.c`
+**问题**: 每订单构造 `std::string`（heap alloc + strlen + copy）做哈希表查询。
 
-**问题描述**: POSIX.1-2008 标记 `gethostbyname` 为弃用。
+**修复**: 
+- `memcpy` 16 字节 symbol → `uint64_t sym_key`
+- `std::unordered_map<uint64_t, bt_order_book_t*>`
+- 添加"上次访问"缓存：连续同 symbol 订单绕过哈希查找
 
-**修复方案**: 替换为 `getaddrinfo` + `freeaddrinfo`，同时处理 IPv4/IPv6 双栈。
-
----
-
-### 15. `bt_lfpool_alloc` strict aliasing 违规
-
-**文件**: `src/include/bt_lockfree_pool.h`
-
-**问题描述**: C 版本的 `*(void **)head` 将任意对象的首 8 字节强制解释为 `void*`，违反了 C 标准的 strict aliasing 规则。
-
-**修复方案**: 引入显式的 `bt_lfpool_node_t` 结构体，要求被池化的对象在 offset 0 嵌入该 header。使用 `node->next` 替代 `*(void **)ptr`。
+**预计提升**: 零分配符号查找 + 90%+ 缓存命中率（连续性交易场景）。
 
 ---
 
-### 16. 其他建议项
+### 10. matching_engine.cpp — 删除冗余 `memset`
 
-| 项目 | 描述 | 建议 |
-|------|------|------|
-| Market Data | MD 线程只累加 tick_count，无实际行情分发 | 实现客户端订阅和行情推送 |
-| Logger 可移植性 | `__attribute__((format(printf, ...)))` 只在 GCC/Clang 可用 | 用 `#ifdef __GNUC__` 保护 |
-| SO_REUSEPORT | 设置了但只创建了一个 gateway | 支持多线程监听或删除设置 |
-| 宏参数求值 | `BT_SPSC_PUSH(q, item)` 中 `item` 可能被多次求值 | 使用中间变量 `__auto_type` |
-| 编译期配置 | 队列容量等通过 `#define` 固定 | 迁移到运行时配置 |
+**文件**: `src/core/matching_engine.cpp`
+
+**问题**: 每订单做 `memset(o, 0, 64)` + 逐字段写入。`bt_mempool_alloc_order` 已清零 → 双重清零。
+
+**修复**: 删除 3 处 `memset` + `strncpy` → `memcpy`。
+
+**预计提升**: 减少每订单 ~160 字节冗余写入。
 
 ---
 
-## 总结
+### 11. sequencer.c — 位掩码路由 + 原子优化
 
-| 严重程度 | 数量 | 已修复 | 关键主题 |
-|---------|------|--------|---------|
-| 🔴 严重 | 3 | 2 (+1 需开发) | MPSC bug ✅, -ffast-math ✅, 核心模块缺失 ⏳ |
-| 🟠 重要 | 4 | 4 | 连接池 ✅, 环形缓冲区 ✅, 二进制协议 ✅, benchmark ✅ |
-| 🟡 中等 | 6 | 6 | volatile ✅, Disruptor ✅, CPU pause ✅, 队列校验 ✅, mempool ✅, Disruptor wrap ✅ |
-| 🔵 轻微 | 3 | 3 | gethostbyname ✅, strict aliasing ✅, 其他建议 |
+**文件**: `src/core/sequencer.c`
 
-**下一步行动项**:
-1. ⏳ **最高优先级**: 实现缺失的核心业务模块（OMS, Risk Engine, Sequencer, Matching Engine）
-2. ✅ 所有基础设施优化已完成
-3. 建议添加单元测试框架（如 Unity 或 Check）覆盖核心模块
-4. 建议向流水线添加端到端延迟测量（需要响应路径）
+**问题**:
+- 整数取模 `user_id % num_shards` → ~20-80 cycles
+- 两个 `SEQ_CST` 原子操作
+- 队列满时静默丢弃订单
+
+**修复**:
+- 约束 `num_shards` 为 2 的幂 → `user_id & (num_shards - 1)` (~1 cycle)
+- 所有原子降为 `__ATOMIC_RELAXED`（单写者线程，读者通过 pthread_join 同步）
+- 队列满时指数退避重试（不丢弃）
+- `__atomic_fetch_add` → `__atomic_add_fetch`（省一条 `+ 1` 指令）
+
+**预计提升**: 每订单 ~20 cycles 节省。
+
+---
+
+## 🟡 P2 — 全流水线原子语义松弛
+
+### 12. 所有模块原子语义从 `SEQ_CST` 降为 `RELAXED`
+
+**文件**: `risk_engine.c`, `clearing.c`, `matching_engine.cpp`, `oms.c`, `order_gate.c`, `sequencer.c`, `main.c`
+
+**问题**: 统计计数器、状态标志使用 `__ATOMIC_SEQ_CST`，每操作触发完整内存屏障（x86: `lock` 前缀 + store-buffer drain）。
+
+**修复**: 
+- 所有统计计数器：`__ATOMIC_RELAXED`（单写者，最终读）
+- `running` 标志：`__ATOMIC_RELAXED`（`pthread_join` 提供同步屏障）
+- `kill_switch`：`__ATOMIC_RELAXED`（紧急开关，允许纳秒级延迟）
+
+**预计提升**: 每订单 -2 到 -5 个 full barrier。
+
+---
+
+## 🔵 P3 — 可观测性和鲁棒性
+
+### 13. main.c — 全流水线健康监控
+
+**文件**: `src/main.c`
+
+**问题**: 健康检查仅覆盖 journal/sequencer/event_bus/clearing（4/9 阶段）。
+
+**修复**: 添加 OrderGate 统计（received/passed/rejected/throttled）。
+
+### 14. event_bus.c — 互斥锁替代读写锁
+
+**问题**: Handler 中执行耗时操作（clearing 账户更新）时持有 rwlock 读锁，阻塞 subscribe/unsubscribe。
+
+**修复**: 改为 `pthread_mutex`，语义更清晰，避免读写锁的写者饥饿问题。
+
+---
+
+## 📊 优化影响总结
+
+| 类别 | 修复数量 | 关键改进 |
+|------|---------|---------|
+| P0 正确性 | 4 | 并发 bug 修复（memory_tier, risk, clearing, event_bus） |
+| P1 热路径 | 7 | rand/malloc/FOK/string/memset/bitmask/backoff |
+| P2 原子 | 1 | 全流水线 SEQ_CST → RELAXED |
+| P3 可观测性 | 2 | 健康监控扩展 + mutex 替换 rwlock |
+
+### 关键性能指标
+
+| 优化项 | 预计收益 |
+|--------|---------|
+| `rand()` → LCG | 消除 skip-list 插入全局锁 |
+| `calloc` → `malloc` | -200B 冗余清零 |
+| FOK O(N) → O(1) | 消除 FOK 全账扫描 |
+| `std::string` → `uint64_t` + cache | 零分配符号查找 |
+| `memset` 删除 | -160B 冗余写入/订单 |
+| 取模 → 位掩码 | ~20 cycles → 1 cycle |
+| SEQ_CST → RELAXED | -2~5 full barriers/订单 |
+
+### 修改文件清单
+
+- `src/utils/slab_allocator.c` — CAS 线程安全
+- `src/utils/memory_tier.c` — WARM race + HOT free 修复
+- `src/core/risk_engine.c` — 数据竞争 + 原子松弛
+- `src/core/clearing.c` — 账户修复 + unsubscribe + 原子松弛
+- `src/core/event_bus.c` — unsubscribe + mutex
+- `src/include/bt_event.h` — unsubscribe 声明
+- `src/core/order_book.cpp` — rand/calloc/FOK/死代码
+- `src/include/bt_order_book.h` — 数量追踪字段
+- `src/core/matching_engine.cpp` — string/memset/原子松弛
+- `src/core/sequencer.c` — 位掩码/退避/原子松弛
+- `src/core/oms.c` — 原子松弛
+- `src/core/order_gate.c` — 原子松弛
+- `src/main.c` — 健康监控扩展 + 原子松弛

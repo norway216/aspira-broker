@@ -37,13 +37,16 @@ void *bt_tier_alloc(bt_tier_t tier, size_t size)
         fprintf(stderr, "[tier] HOT exhausted, falling back to WARM\n");
         /* FALLTHROUGH */
     case BT_TIER_WARM:
-        if (g_warm_pool && g_warm_offset + size <= g_warm_size) {
-            void *ptr = (uint8_t *)g_warm_pool + g_warm_offset;
+        if (g_warm_pool) {
             size_t aligned = (size + 63) & ~(size_t)63;
-            g_warm_offset += aligned;
-            __atomic_fetch_add(&g_tier_stats.warm_allocs, 1, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&g_tier_stats.warm_bytes, size, __ATOMIC_RELAXED);
-            return ptr;
+            size_t my_offset = __atomic_fetch_add(&g_warm_offset, aligned,
+                                                   __ATOMIC_RELAXED);
+            if (my_offset + aligned <= g_warm_size) {
+                void *ptr = (uint8_t *)g_warm_pool + my_offset;
+                __atomic_fetch_add(&g_tier_stats.warm_allocs, 1, __ATOMIC_RELAXED);
+                __atomic_fetch_add(&g_tier_stats.warm_bytes, size, __ATOMIC_RELAXED);
+                return ptr;
+            }
         }
         /* Fallback to cold */
         fprintf(stderr, "[tier] WARM exhausted, falling back to COLD\n");
@@ -63,8 +66,13 @@ void bt_tier_free(bt_tier_t tier, void *ptr, size_t size)
     case BT_TIER_HOT:
         /* Return to hot slab — find which slab owns this ptr */
         for (int i = 0; i < g_num_hot; i++) {
-            bt_slab_free(&g_hot_slabs[i], ptr);
-            return;
+            uintptr_t p    = (uintptr_t)ptr;
+            uintptr_t base = (uintptr_t)g_hot_slabs[i].base;
+            if (p >= base &&
+                p < base + g_hot_slabs[i].num_blocks * g_hot_slabs[i].aligned_size) {
+                bt_slab_free(&g_hot_slabs[i], ptr);
+                return;
+            }
         }
         break;
     case BT_TIER_WARM:

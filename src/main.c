@@ -238,15 +238,20 @@ int main(int argc, char **argv)
             uint64_t ev_pub = 0, ev_del = 0;
             uint64_t clr_trades = 0, clr_ledger = 0;
             double   clr_notional = 0;
+            uint64_t gate_recv = 0, gate_pass = 0, gate_rej = 0, gate_thr = 0;
 
             if (g_journal)   bt_journal_stats(g_journal, &jw, &jd);
             bt_sequencer_stats(g_sequencer, &seq_orders, &seq_global);
             bt_event_bus_stats(g_event_bus, &ev_pub, &ev_del);
             bt_clearing_stats(g_clearing, &clr_trades, &clr_notional, &clr_ledger);
+            if (g_ordergate) bt_order_gate_stats(g_ordergate, &gate_recv,
+                                                  &gate_pass, &gate_rej, &gate_thr);
 
-            BT_LOG_INFO("V5: j_w=%lu seq=%lu/%lu ev=%lu/%lu clr=%lu/%.0f ledger=%lu",
-                         jw, seq_orders, seq_global, ev_pub, ev_del,
-                         clr_trades, clr_notional, clr_ledger);
+            BT_LOG_INFO("V5: seq=%lu/%lu ev=%lu/%lu clr=%lu/%.0f ledger=%lu jw=%lu",
+                         seq_orders, seq_global, ev_pub, ev_del,
+                         clr_trades, clr_notional, clr_ledger, jw);
+            BT_LOG_INFO("V5 Gate: recv=%lu pass=%lu rej=%lu thr=%lu",
+                         gate_recv, gate_pass, gate_rej, gate_thr);
             bt_log_flush();
             last_health = now;
         }
