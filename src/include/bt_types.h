@@ -148,6 +148,14 @@ typedef struct {
     uint64_t        timestamp;
 } bt_order_request_t;
 
+/* ── Cancel Request (from gateway to matching engine) ──────────────── */
+typedef struct {
+    uint64_t        order_id;       /* ID of the order to cancel */
+    uint64_t        user_id;        /* user requesting the cancel */
+    char            symbol[16];     /* symbol of the order */
+    uint64_t        timestamp;      /* arrival time */
+} bt_cancel_request_t;
+
 /* ── Order Response (back to gateway) ──────────────────────────────── */
 typedef struct {
     uint64_t          request_id;

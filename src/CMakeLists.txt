@@ -48,6 +48,7 @@ set(C_SOURCES
     core/event_bus.c
     core/clearing.c
     core/shard_ipc.c
+    core/recovery.c
     utils/memory_tier.c
     net/gateway.c
     md/market_data.c

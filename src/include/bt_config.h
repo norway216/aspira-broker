@@ -108,6 +108,7 @@ typedef struct {
     int     run_benchmark;
     int     benchmark_orders;
     int     benchmark_symbols;
+    int     use_isolated;      /* use process isolation for matching */
 } bt_runtime_config_t;
 
 /* Default runtime config */
