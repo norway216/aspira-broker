@@ -151,11 +151,12 @@ private:
     SlNode *asks_;    /* skip list, ascending */
     std::unordered_map<uint64_t, bt_order_node_t*> order_index_;
 
-    /* Skip list helpers */
+    /* Skip list helpers.
+     * `ascending` flag controls sort: 1=ascending (asks), 0=descending (bids). */
     static constexpr int SKIPLIST_MAX_LEVEL = BT_SKIPLIST_MAX_LEVEL;
-    SlNode *sl_insert(SlNode *head, double price, bt_price_level_t *level);
-    SlNode *sl_find(SlNode *head, double price);
-    SlNode *sl_remove(SlNode *head, double price);
+    SlNode *sl_insert(SlNode *head, double price, int ascending);
+    SlNode *sl_find(SlNode *head, double price, int ascending);
+    SlNode *sl_remove(SlNode *head, double price, int ascending);
     void sl_destroy(SlNode *head);
     int random_level();
 };

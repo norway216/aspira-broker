@@ -89,19 +89,28 @@ extern "C" {
 
 #define BT_MPSC_QUEUE_CAP(q) ((q).mask + 1)
 
+/* MPSC Push (Vyukov algorithm, corrected):
+ * CAS-loop on tail to claim a slot. The full-check (next == head) is done
+ * before CAS; if CAS succeeds despite a concurrent consumer advancing head,
+ * the slot is still ours — write unconditionally.
+ *
+ * FIX (2026-06): the post-CAS `if (__next != head)` guard was removed.
+ * After CAS won the slot, refusing to write leaves tail advanced over
+ * stale/garbage data — the consumer will read it as a valid item.
+ * CAS-claim + unconditional write is the canonical Vyukov MPSC form. */
 #define BT_MPSC_PUSH(q, item) ({                                         \
         int __ret = 0;                                                   \
         size_t __t, __next;                                              \
         do {                                                             \
             __t = BT_ATOMIC_LOAD((q).tail, relaxed);                    \
             __next = (__t + 1) & (q).mask;                               \
-            size_t __h = BT_ATOMIC_LOAD((q).head, acquire);             \
-            if (__next == __h) break;                                    \
+            if (__next == BT_ATOMIC_LOAD((q).head, acquire)) {          \
+                __ret = 0; goto __mpsc_push_done;                        \
+            }                                                            \
         } while (!BT_ATOMIC_CAS_WEAK((q).tail, __t, __next, release, relaxed)); \
-        if (__next != BT_ATOMIC_LOAD((q).head, acquire)) {              \
-            (q).buffer[__t] = (item);                                    \
-            __ret = 1;                                                   \
-        }                                                                \
+        (q).buffer[__t] = (item);  /* write unconditionally after CAS */ \
+        __ret = 1;                                                       \
+        __mpsc_push_done: ;                                              \
         __ret;                                                           \
     })
 

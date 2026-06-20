@@ -29,7 +29,8 @@ typedef _Atomic size_t bt_atomic_size_t;
 typedef struct bt_mempool {
     void       *base;             /* start of the memory slab */
     size_t      total_size;       /* total size of the slab */
-    bt_atomic_size_t offset;      /* global bump offset for bulk alloc */
+    bt_atomic_size_t offset;      /* global bump offset for initial arena carving */
+    bt_atomic_size_t arena_counter; /* round-robin counter for arena assignment */
     int         num_arenas;       /* number of per-thread arenas */
     void       *arenas;           /* array of bt_mempool_arena */
     int         hugepage;         /* 1 if backed by hugepages */

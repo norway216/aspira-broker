@@ -5,6 +5,9 @@
 #include "bt_event.h"
 #include "bt_clearing.h"
 #include "bt_order_gate.h"
+#include "bt_oms.h"
+#include "bt_risk.h"
+#include "bt_matching.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
 #include "bt_memory_pool.h"
@@ -13,6 +16,7 @@
 #include "bt_lockfree_pool.h"
 #include "bt_numa.h"
 #include "bt_logger.h"
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,41 +42,10 @@
  *                          [Clearing] [Journal]  [Audit/Future]
  */
 
-/* ── Forward declarations ──────────────────────────────────────────── */
+/* ── Forward declarations for non-header modules ──────────────────── */
 
-typedef struct bt_oms_ctx_t      bt_oms_ctx_t;
-typedef struct bt_risk_state_t   bt_risk_state_t;
-typedef struct bt_risk_worker_t  bt_risk_worker_t;
-typedef struct bt_matching_ctx_t bt_matching_ctx_t;
-typedef struct gw_ctx_t          gw_ctx_t;
-typedef struct bt_md_ctx_t       bt_md_ctx_t;
-
-/* OMS */
-bt_oms_ctx_t *bt_oms_create(int tid, int cpu, bt_gw_oms_queue_t *in, bt_risk_in_queue_t *out);
-int  bt_oms_start(bt_oms_ctx_t *ctx);
-void bt_oms_stop(bt_oms_ctx_t *ctx);
-void bt_oms_destroy(bt_oms_ctx_t *ctx);
-
-/* Risk Engine */
-bt_risk_state_t  *bt_risk_state_create(void);
-void              bt_risk_state_destroy(bt_risk_state_t *s);
-void              bt_risk_kill_switch(bt_risk_state_t *s, int on);
-bt_risk_worker_t *bt_risk_worker_create(int wid, int cpu, bt_risk_in_queue_t *in,
-                                         bt_seq_in_queue_t *out, int nout,
-                                         bt_risk_state_t *st);
-int  bt_risk_worker_start(bt_risk_worker_t *w);
-void bt_risk_worker_stop(bt_risk_worker_t *w);
-void bt_risk_worker_destroy(bt_risk_worker_t *w);
-
-/* Matching Engine (V5: + event_bus parameter) */
-bt_matching_ctx_t *bt_matching_create(int tid, int cpu, bt_match_in_queue_t *in,
-                                       bt_md_tick_queue_t *md,
-                                       bt_mempool_arena_t *arena,
-                                       bt_journal_t *journal,
-                                       bt_event_bus_t *event_bus);
-int  bt_matching_start(bt_matching_ctx_t *ctx);
-void bt_matching_stop(bt_matching_ctx_t *ctx);
-void bt_matching_destroy(bt_matching_ctx_t *ctx);
+typedef struct gw_ctx_t    gw_ctx_t;
+typedef struct bt_md_ctx_t bt_md_ctx_t;
 
 /* Gateway */
 gw_ctx_t *bt_gateway_create(int tid, int cpu, int port, int max_conns,
@@ -91,7 +64,7 @@ void bt_md_destroy(bt_md_ctx_t *ctx);
 void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue);
 
 /* ── Global state ──────────────────────────────────────────────────── */
-static volatile int g_running = 1;
+static atomic_int g_running = 1;  /* _Atomic: correct C11 cross-thread visibility */
 
 static bt_mempool_t        g_mempool;
 static bt_journal_t       *g_journal    = NULL;
@@ -120,7 +93,7 @@ static void *g_seq_out_queues[BT_CFG_MATCHING_THREADS];
 static bt_runtime_config_t g_cfg;
 
 /* ── Signal handler ────────────────────────────────────────────────── */
-static void sig_handler(int sig) { (void)sig; g_running = 0; }
+static void sig_handler(int sig) { (void)sig; atomic_store(&g_running, 0); }
 
 /* ── Print banner ──────────────────────────────────────────────────── */
 static void print_banner(void)
@@ -255,9 +228,9 @@ int main(int argc, char **argv)
 
     /* ── Main wait loop ─────────────────────────────────────────────── */
     uint64_t last_health = bt_timer_now_ns();
-    while (g_running) {
+    while (atomic_load(&g_running)) {
         usleep(1000000);
-        if (!g_running) break;
+        if (!atomic_load(&g_running)) break;
 
         uint64_t now = bt_timer_now_ns();
         if (now - last_health > 5000000000UL) {

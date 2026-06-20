@@ -37,6 +37,7 @@ int bt_mempool_init(bt_mempool_t *pool, size_t total_size,
     pool->num_arenas = num_arenas;
     pool->hugepage = use_hugepages;
     atomic_init(&pool->offset, 0);
+    atomic_init(&pool->arena_counter, 0);
 
     /* Arena metadata at end of slab */
     size_t arena_array_size = num_arenas * sizeof(bt_mempool_arena_t);
@@ -85,18 +86,21 @@ bt_mempool_arena_t *bt_mempool_get_arena(bt_mempool_t *pool)
     /* Return cached arena if already assigned for this thread */
     if (tls_arena) return tls_arena;
 
-    /* Assign a new arena using an atomic counter (round-robin) */
-    unsigned int id = atomic_fetch_add(&pool->offset, 1) % pool->num_arenas;
+    /* Assign a new arena using the dedicated arena_counter (round-robin).
+     * Prior fix: pool->offset was also misused as the global bump-alloc
+     * cursor; we now use a separate arena_counter field for round-robin. */
+    unsigned int id = atomic_fetch_add(&pool->arena_counter, 1) % pool->num_arenas;
     bt_mempool_arena_t *arenas = (bt_mempool_arena_t *)pool->arenas;
     tls_arena = &arenas[id];
     return tls_arena;
 }
 
 /* Allocate a fresh arena WITHOUT TLS caching — for cross-thread assignment.
- * Used by the main thread to assign dedicated arenas to worker threads. */
+ * Used by the main thread to assign dedicated arenas to worker threads.
+ * Uses the dedicated arena_counter (not offset) for round-robin assignment. */
 bt_mempool_arena_t *bt_mempool_assign_arena(bt_mempool_t *pool)
 {
-    unsigned int id = atomic_fetch_add(&pool->offset, 1) % pool->num_arenas;
+    unsigned int id = atomic_fetch_add(&pool->arena_counter, 1) % pool->num_arenas;
     bt_mempool_arena_t *arenas = (bt_mempool_arena_t *)pool->arenas;
     return &arenas[id];
 }

@@ -1,6 +1,8 @@
-# Exchange-Grade Isolated Trading System (V6)
+# Exchange-Grade Isolated Trading System (V6 — 2026-06 Optimized)
 
 A **fully isolated, fault-domain-separated, production-grade electronic trading platform** targeting Binance/NASDAQ-level performance. Built with **C11** and **C++20**, featuring process-level isolation, event sourcing, global sequencing, NUMA-aware tiered memory, a sharded deterministic matching engine, and a full clearing & settlement layer — capable of **6.65+ million orders per second** through the full pipeline.
+
+> **2026-06 Optimization Patch**: Comprehensive code audit and optimization — see [`docs/optimization_report.md`](docs/optimization_report.md) for details. Key fixes include: MPSC queue write-loss bug, `-ffast-math` removal for IEEE 754 compliance, volatile→`_Atomic` migration, connection pool reuse, ring-buffer gateway recv, binary protocol fast-path, and more.
 
 > Based on `docs/trading_system_architecture_v6.md`
 
@@ -25,6 +27,7 @@ A **fully isolated, fault-domain-separated, production-grade electronic trading 
 - [Market Data](#market-data)
 - [Benchmarking](#benchmarking)
 - [Design Goals](#design-goals)
+- [Optimization Report](#optimization-report)
 - [License](#license)
 
 ---
@@ -114,8 +117,10 @@ Benchmarked on **Intel i9-12900H (20 cores)**, 16 GB RAM, Linux 6.17, GCC 13.3:
 ### 1. API Gateway (`src/net/gateway.c`)
 - TCP server with **epoll** edge-triggered I/O
 - Non-blocking sockets with `SO_REUSEPORT`, `TCP_NODELAY`
-- Simple binary protocol: `[4B length][1B type][N-byte payload]`
-- FIX-lite payload format: `key=value|key=value|...`
+- **Text protocol** (`type='O'`): FIX-lite `key=value|key=value|...` (human-readable, debug-friendly)
+- **Binary protocol** (`type='B'`): raw `bt_order_request_t` struct — zero-copy deserialization for high-throughput clients
+- **Ring-buffer recv**: O(1) message consumption, no `memmove` overhead
+- **Connection pool reuse**: closed slots are recycled, preventing denial under churn
 - Token-bucket rate limiting per connection
 - Up to 1,024 concurrent connections
 
@@ -299,6 +304,10 @@ aspira-broker/
 
 **~5,500 lines** of C and C++ across **40 files** (19 headers + 21 source files).
 
+> **Implementation Status**: Infrastructure layer (networking, IPC, memory, timers, logging, persistence) is fully implemented. Core trading modules (OMS, Risk Engine, Sequencer, Matching Engine, Event Bus, Clearing, Order Gate) have headers defined but their `.c`/`.cpp` implementations are pending. See [`docs/optimization_report.md`](docs/optimization_report.md) for details.
+
+> **Optimization History**: See [`docs/optimization_report.md`](docs/optimization_report.md) for the full 2026-06 optimization audit and applied fixes.
+
 ## Build & Run
 
 ### Prerequisites
@@ -346,17 +355,28 @@ echo -ne '\x00\x00\x00\x1aO u=100|s=SYM0001|p=100.50|q=100|d=B|t=L' | nc localho
 echo -ne '\x00\x00\x00\x1aO u=100|s=SYM0001|p=0|q=50|d=S|t=M' | nc localhost 9000
 ```
 
-**Binary Protocol Format:**
+**Wire Protocol Formats:**
+
+**Type `'O'` — Text (FIX-lite, human-readable):**
 ```
 [4 bytes: total message length, network byte order]
-[1 byte:  message type]
-   'O' = New Order
-   'C' = Cancel Order
+[1 byte:  'O']
 [N bytes: payload]
    key=value|key=value|...
    Fields: u (user_id), s (symbol), p (price), q (quantity),
            d (side: B/S), t (type: L/M/I/F)
 ```
+
+**Type `'B'` — Binary (high-performance, zero-copy):**
+```
+[4 bytes: total message length, network byte order]
+[1 byte:  'B']
+[N bytes: raw bt_order_request_t struct (48+ bytes, native byte order)]
+   See bt_types.h for struct layout.
+   Server-side timestamp is overwritten on arrival for accuracy.
+```
+
+> **Recommendation**: Use type `'B'` for production/high-throughput clients. Type `'O'` text protocol is maintained for debugging, manual testing, and backward compatibility.
 
 ## Configuration
 
@@ -376,6 +396,11 @@ Key constants in `src/include/bt_config.h`:
 | `BT_CFG_JOURNAL_SYNC_MS` | 1 | Journal fsync interval |
 
 Runtime overrides: `--port`, `--matching-threads`, `--bench`, `--symbols`, `--no-bench`.
+
+### Compilation Notes
+- **IEEE 754 compliance**: `-ffast-math` is intentionally NOT used — this is a financial system and correct floating-point semantics are mandatory.
+- **Queue capacity validation**: all queue sizes are compile-time checked to be powers of 2 (required for lock-free mask ops).
+- **Thread safety**: all cross-thread flags use C11 `_Atomic` instead of `volatile`.
 
 ## Hot-Path Design
 
@@ -401,7 +426,7 @@ The core order processing pipeline is **lock-free end-to-end**:
 ### CPU
 - **Core pinning**: critical threads on dedicated cores, I/O on isolated cores
 - **SCHED_FIFO**: Sequencer 85, Matching 90, Risk 80, OMS 70, Gateway 60
-- **`__builtin_ia32_pause`**: spin-wait hint in busy loops
+- **`BT_CPU_PAUSE()`**: portable spin-wait hint (x86 `pause` / ARM `yield`)
 
 ## Threading Model
 
@@ -641,6 +666,25 @@ Controller ──fork()──▶ [Shard 0 Process] Core 6  ──shmem── Inp
 | **Branchless hot path** | ✅ | **Single-branch matching, 4-way unrolled tick emission** |
 | **Hot standby** | ✅ | **Journal replay infrastructure for fault recovery** |
 | Zero-GC hot path | ✅ | No malloc/free in any critical path |
+
+## Optimization Report
+
+A comprehensive code audit was performed in June 2026. See the full report:
+
+📄 **[`docs/optimization_report.md`](docs/optimization_report.md)**
+
+### Fixed Issues Summary
+
+| Severity | Count | Key Fixes |
+|----------|-------|-----------|
+| 🔴 Critical | 2 fixed (+1 pending) | MPSC queue write-loss bug, `-ffast-math` removal |
+| 🟠 High | 4 fixed | Connection pool reuse, ring-buffer recv, binary protocol, benchmark stats |
+| 🟡 Medium | 6 fixed | `volatile`→`_Atomic`, Disruptor C impl, CPU pause portability, queue pow2 checks, mempool counter, C++ Disruptor wrap |
+| 🔵 Low | 3 fixed | `getaddrinfo` migration, strict aliasing fix, portability guards |
+
+**Pending**: Core business module implementations (OMS, Risk Engine, Sequencer, Matching Engine, Event Bus, Clearing, Order Gate) — headers defined but `.c`/`.cpp` files not yet created.
+
+---
 
 ## License
 

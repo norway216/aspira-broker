@@ -15,15 +15,20 @@ extern "C" {
  * CAS-based freelist for multi-producer, multi-consumer object pooling.
  * Safe to allocate and free from any thread without locks.
  *
- * Each pooled object embeds a next-pointer at offset 0.
- * The caller is responsible for the object's memory — the pool
- * only manages the free list of recycled objects.
+ * FIX (2026-06): Replaced `*(void **)ptr` strict-aliasing violation with
+ * an explicit `bt_lfpool_node_t` header that objects must embed at offset 0.
+ * This is both C11-compliant and clearer about the ownership contract.
  */
 
+/* Pooled objects must embed this header at offset 0 */
+typedef struct bt_lfpool_node {
+    struct bt_lfpool_node *next;
+} bt_lfpool_node_t;
+
 typedef struct bt_lfpool {
-    _Atomic void *head;           /* CAS-guarded freelist head */
-    _Atomic size_t alloc_count;   /* number of allocs (for stats) */
-    _Atomic size_t free_count;    /* number of frees (for stats) */
+    _Atomic bt_lfpool_node_t *head;  /* CAS-guarded freelist head */
+    _Atomic size_t alloc_count;      /* number of allocs (for stats) */
+    _Atomic size_t free_count;       /* number of frees (for stats) */
     char _pad[BT_CACHE_LINE_SIZE - 24];
 } bt_lfpool_t;
 
@@ -40,41 +45,43 @@ static inline void bt_lfpool_init(bt_lfpool_t *pool)
  * Pop an object from the pool's free list.
  * Returns NULL if the pool is empty.
  * Thread-safe: multiple threads can allocate concurrently.
+ *
+ * Usage: `MyObj *obj = (MyObj *)bt_lfpool_alloc(&pool);`
+ *   The first field of MyObj must be `bt_lfpool_node_t _pool_node;`.
  */
 static inline void *bt_lfpool_alloc(bt_lfpool_t *pool)
 {
-    void *head;
+    bt_lfpool_node_t *head;
     do {
-        head = atomic_load_explicit(&pool->head, memory_order_acquire);
+        head = (bt_lfpool_node_t *)__atomic_load_n(&pool->head, __ATOMIC_ACQUIRE);
         if (!head) {
-            /* Pool empty — caller must fall back to bulk allocation */
-            return NULL;
+            return NULL; /* pool empty */
         }
-    } while (!atomic_compare_exchange_weak_explicit(
-                 &pool->head, &head,
-                 *(void **)head,  /* next pointer at offset 0 */
-                 memory_order_release, memory_order_relaxed));
+    } while (!__atomic_compare_exchange_n(&pool->head, &head,
+                 head->next, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
 
-    atomic_fetch_add(&pool->alloc_count, 1);
+    __atomic_fetch_add(&pool->alloc_count, 1, __ATOMIC_RELAXED);
     return head;
 }
 
 /**
  * Return an object to the pool's free list.
  * Thread-safe: multiple threads can free concurrently.
+ *
+ * @param ptr  Pointer to an object whose first field is bt_lfpool_node_t.
  */
 static inline void bt_lfpool_free(bt_lfpool_t *pool, void *ptr)
 {
     if (!ptr) return;
 
-    void *old_head = atomic_load_explicit(&pool->head, memory_order_acquire);
+    bt_lfpool_node_t *node = (bt_lfpool_node_t *)ptr;
+    bt_lfpool_node_t *old_head = (bt_lfpool_node_t *)__atomic_load_n(&pool->head, __ATOMIC_ACQUIRE);
     do {
-        *(void **)ptr = old_head;
-    } while (!atomic_compare_exchange_weak_explicit(
-                 &pool->head, &old_head, ptr,
-                 memory_order_release, memory_order_relaxed));
+        node->next = old_head;
+    } while (!__atomic_compare_exchange_n(&pool->head, &old_head, node,
+                 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
 
-    atomic_fetch_add(&pool->free_count, 1);
+    __atomic_fetch_add(&pool->free_count, 1, __ATOMIC_RELAXED);
 }
 
 /**
@@ -85,19 +92,18 @@ static inline void bt_lfpool_bulk_free(bt_lfpool_t *pool, void **ptrs, size_t co
 {
     if (!count) return;
 
-    /* Link the array into a chain */
+    /* Link the array into a chain using explicit node pointers */
     for (size_t i = 0; i < count - 1; i++) {
-        *(void **)ptrs[i] = ptrs[i + 1];
+        ((bt_lfpool_node_t *)ptrs[i])->next = (bt_lfpool_node_t *)ptrs[i + 1];
     }
 
-    void *old_head = atomic_load_explicit(&pool->head, memory_order_acquire);
+    bt_lfpool_node_t *old_head = (bt_lfpool_node_t *)__atomic_load_n(&pool->head, __ATOMIC_ACQUIRE);
     do {
-        *(void **)ptrs[count - 1] = old_head;
-    } while (!atomic_compare_exchange_weak_explicit(
-                 &pool->head, &old_head, ptrs[0],
-                 memory_order_release, memory_order_relaxed));
+        ((bt_lfpool_node_t *)ptrs[count - 1])->next = old_head;
+    } while (!__atomic_compare_exchange_n(&pool->head, &old_head,
+                 (bt_lfpool_node_t *)ptrs[0], 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
 
-    atomic_fetch_add(&pool->free_count, count);
+    __atomic_fetch_add(&pool->free_count, count, __ATOMIC_RELAXED);
 }
 
 /**
@@ -106,8 +112,8 @@ static inline void bt_lfpool_bulk_free(bt_lfpool_t *pool, void **ptrs, size_t co
 static inline void bt_lfpool_stats(const bt_lfpool_t *pool,
                                     size_t *allocs, size_t *frees)
 {
-    if (allocs) *allocs = atomic_load(&pool->alloc_count);
-    if (frees)  *frees  = atomic_load(&pool->free_count);
+    if (allocs) *allocs = __atomic_load_n(&pool->alloc_count, __ATOMIC_RELAXED);
+    if (frees)  *frees  = __atomic_load_n(&pool->free_count, __ATOMIC_RELAXED);
 }
 
 #ifdef __cplusplus

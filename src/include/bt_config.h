@@ -25,13 +25,31 @@ extern "C" {
 /* Number of journal writer threads */
 #define BT_CFG_JOURNAL_THREADS     1
 
-/* ── Queue Capacities ───────────────────────────────────────────────── */
+/* ── Queue Capacities (must be powers of 2 for lock-free mask ops) ──── */
 #define BT_CFG_GATEWAY_QUEUE_CAP   65536
 #define BT_CFG_OMS_QUEUE_CAP       65536
 #define BT_CFG_RISK_QUEUE_CAP      65536
 #define BT_CFG_MATCH_QUEUE_CAP     65536
 #define BT_CFG_TRADE_QUEUE_CAP    131072
 #define BT_CFG_JOURNAL_QUEUE_CAP  262144
+
+/* Compile-time power-of-2 validation for all queue capacities */
+#define _BT_IS_POW2(x) (((x) != 0) && (((x) & ((x) - 1)) == 0))
+#ifdef __cplusplus
+static_assert(_BT_IS_POW2(BT_CFG_GATEWAY_QUEUE_CAP), "GATEWAY_QUEUE_CAP must be power of 2");
+static_assert(_BT_IS_POW2(BT_CFG_OMS_QUEUE_CAP),     "OMS_QUEUE_CAP must be power of 2");
+static_assert(_BT_IS_POW2(BT_CFG_RISK_QUEUE_CAP),    "RISK_QUEUE_CAP must be power of 2");
+static_assert(_BT_IS_POW2(BT_CFG_MATCH_QUEUE_CAP),   "MATCH_QUEUE_CAP must be power of 2");
+static_assert(_BT_IS_POW2(BT_CFG_TRADE_QUEUE_CAP),   "TRADE_QUEUE_CAP must be power of 2");
+static_assert(_BT_IS_POW2(BT_CFG_JOURNAL_QUEUE_CAP), "JOURNAL_QUEUE_CAP must be power of 2");
+#else
+_Static_assert(_BT_IS_POW2(BT_CFG_GATEWAY_QUEUE_CAP), "GATEWAY_QUEUE_CAP must be power of 2");
+_Static_assert(_BT_IS_POW2(BT_CFG_OMS_QUEUE_CAP),     "OMS_QUEUE_CAP must be power of 2");
+_Static_assert(_BT_IS_POW2(BT_CFG_RISK_QUEUE_CAP),    "RISK_QUEUE_CAP must be power of 2");
+_Static_assert(_BT_IS_POW2(BT_CFG_MATCH_QUEUE_CAP),   "MATCH_QUEUE_CAP must be power of 2");
+_Static_assert(_BT_IS_POW2(BT_CFG_TRADE_QUEUE_CAP),   "TRADE_QUEUE_CAP must be power of 2");
+_Static_assert(_BT_IS_POW2(BT_CFG_JOURNAL_QUEUE_CAP), "JOURNAL_QUEUE_CAP must be power of 2");
+#endif
 
 /* ── Memory Pool Configuration ──────────────────────────────────────── */
 #define BT_CFG_MEMPOOL_SIZE_MB     4096
