@@ -116,7 +116,8 @@ public:
     /* Internal skip-list-backed order book */
     struct SlNode;
 
-    OrderBook(const char *sym) : symbol_(sym), bids_(nullptr), asks_(nullptr) {
+    OrderBook(const char *sym) : symbol_(sym), bids_(nullptr), asks_(nullptr),
+                                   total_bid_qty_(0), total_ask_qty_(0) {
         order_index_.reserve(65536);
     }
 
@@ -150,6 +151,8 @@ private:
     SlNode *bids_;    /* skip list, descending */
     SlNode *asks_;    /* skip list, ascending */
     std::unordered_map<uint64_t, bt_order_node_t*> order_index_;
+    uint64_t total_bid_qty_;  /* cached sum for O(1) FOK check */
+    uint64_t total_ask_qty_;  /* cached sum for O(1) FOK check */
 
     /* Skip list helpers.
      * `ascending` flag controls sort: 1=ascending (asks), 0=descending (bids). */

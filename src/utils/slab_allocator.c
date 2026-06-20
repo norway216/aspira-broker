@@ -37,13 +37,24 @@ int bt_slab_init(bt_slab_t *slab, void *memory, size_t memory_size, size_t block
 
 void *bt_slab_alloc(bt_slab_t *slab)
 {
-    if (!slab || !slab->free_list) return NULL;
+    if (!slab) return NULL;
 
-    void *ptr = slab->free_list;
-    slab->free_list = *(void **)ptr;
-    slab->alloc_count++;
-    slab->free_count--;
-    return ptr;
+    /* Thread-safe: CAS-loop on free_list head (ABA-safe since each
+     * block is only ever pushed back by the thread that owns it via
+     * bt_slab_free; and since slabs are NOT shared between threads
+     * in Tier, we can keep this simple. For multi-thread Tier use,
+     * we use __atomic CAS. */
+    void *old_head, *new_head;
+    do {
+        old_head = (void *)__atomic_load_n(&slab->free_list, __ATOMIC_ACQUIRE);
+        if (!old_head) return NULL;
+        new_head = *(void **)old_head;
+    } while (!__atomic_compare_exchange_n(&slab->free_list, &old_head, new_head,
+                                           0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+
+    __atomic_fetch_add(&slab->alloc_count, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_sub(&slab->free_count, 1, __ATOMIC_RELAXED);
+    return old_head;
 }
 
 void bt_slab_free(bt_slab_t *slab, void *ptr)
@@ -56,10 +67,17 @@ void bt_slab_free(bt_slab_t *slab, void *ptr)
         return;
     }
 
-    *(void **)ptr = slab->free_list;
-    slab->free_list = ptr;
-    slab->free_count++;
-    if (slab->alloc_count > 0) slab->alloc_count--;
+    /* Thread-safe: CAS-loop push onto free_list */
+    void *old_head;
+    do {
+        old_head = (void *)__atomic_load_n(&slab->free_list, __ATOMIC_ACQUIRE);
+        *(void **)ptr = old_head;
+    } while (!__atomic_compare_exchange_n(&slab->free_list, &old_head, ptr,
+                                           0, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+
+    __atomic_fetch_add(&slab->free_count, 1, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&slab->alloc_count, __ATOMIC_RELAXED) > 0)
+        __atomic_fetch_sub(&slab->alloc_count, 1, __ATOMIC_RELAXED);
 }
 
 void bt_slab_reset(bt_slab_t *slab)
