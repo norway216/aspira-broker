@@ -19,14 +19,31 @@ typedef struct {
     char     symbol[16];
     uint64_t user_id;
     int64_t  position;
+    _Atomic double user_notional;   /* per-user exposure (Round 4) */
 } bt_risk_position_t;
+
+#define BT_RISK_MAX_USER_EXPOSURES 4096
+
+typedef struct {
+    uint64_t        user_id;
+    _Atomic double  notional;        /* per-user notional */
+} bt_risk_user_exposure_t;
 
 typedef struct bt_risk_state {
     int                  kill_switch;       /* __atomic_* access */
+    int                  breaker_active;    /* circuit breaker tripped? */
     uint64_t             total_checked;     /* __atomic_* access */
     uint64_t             total_passed;      /* __atomic_* access */
     uint64_t             total_rejected;    /* __atomic_* access */
     _Atomic double       total_notional;    /* C11 atomic access */
+    /* Circuit breaker rate tracking (Round 4) */
+    _Atomic uint64_t     rate_bucket_count;
+    _Atomic uint64_t     rate_window_start_ns;
+    /* Per-user exposure tracking (Round 4) */
+    bt_risk_user_exposure_t *user_exposures;
+    int                  num_user_exposures;
+    int                  max_user_exposures;
+    /* Per-symbol positions */
     bt_risk_position_t  *positions;
     int                  num_positions;
     int                  max_positions;

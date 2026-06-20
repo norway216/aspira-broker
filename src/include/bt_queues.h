@@ -11,28 +11,36 @@ extern "C" {
 
 /* ── Shared Queue Element Types ────────────────────────────────────── */
 
-/* Gateway → OMS */
+/* Gateway → OMS (carries orders OR cancels, discriminated by msg_type) */
 typedef struct {
-    bt_order_request_t request;
+    uint8_t            msg_type;   /* 'O'=order, 'C'=cancel */
+    bt_order_request_t request;    /* valid for 'O' */
+    bt_cancel_request_t cancel;    /* valid for 'C' */
     uint64_t           seq_num;
 } bt_gw_oms_msg_t;
 
 /* OMS → Risk */
 typedef struct {
+    uint8_t            msg_type;   /* 'O'=order, 'C'=cancel */
     bt_order_request_t request;
+    bt_cancel_request_t cancel;
     uint64_t           seq_num;
 } bt_oms_risk_msg_t;
 
-/* Risk → Sequencer (risk result + order) */
+/* Risk → Sequencer (risk result + order/cancel) */
 typedef struct {
+    uint8_t            msg_type;   /* 'O'=order, 'C'=cancel */
     bt_order_request_t request;
+    bt_cancel_request_t cancel;
     bt_risk_result_t   risk;
     uint64_t           seq_num;
 } bt_risk_seq_msg_t;
 
 /* Sequencer → Matching Engine (adds global sequence ID) */
 typedef struct {
+    uint8_t            msg_type;   /* 'O'=order, 'C'=cancel */
     bt_order_request_t request;
+    bt_cancel_request_t cancel;
     bt_risk_result_t   risk;
     uint64_t           local_seq;
     uint64_t           global_seq;
@@ -57,6 +65,9 @@ BT_MPSC_QUEUE_DEF(bt_seq_in_queue_t, bt_risk_seq_msg_t, BT_CFG_RISK_QUEUE_CAP);
 
 /* MPSC: Sequencer → Matching Engine shard (one sequencer → N matchers) */
 BT_MPSC_QUEUE_DEF(bt_match_in_queue_t, bt_seq_match_msg_t, BT_CFG_MATCH_QUEUE_CAP);
+
+/* Matching Engine → Gateway response (for client confirmations) */
+BT_MPSC_QUEUE_DEF(bt_gw_response_queue_t, bt_order_response_t, BT_CFG_GATEWAY_QUEUE_CAP);
 
 /* ── Helper: initialize all queues ─────────────────────────────────── */
 

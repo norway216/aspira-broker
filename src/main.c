@@ -8,6 +8,7 @@
 #include "bt_oms.h"
 #include "bt_risk.h"
 #include "bt_matching.h"
+#include "bt_recovery.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
 #include "bt_memory_pool.h"
@@ -49,7 +50,8 @@ typedef struct bt_md_ctx_t bt_md_ctx_t;
 
 /* Gateway */
 gw_ctx_t *bt_gateway_create(int tid, int cpu, int port, int max_conns,
-                              bt_gw_oms_queue_t *out);
+                              bt_gw_oms_queue_t *out,
+                              bt_gw_response_queue_t *response_queue);
 int  bt_gateway_start(gw_ctx_t *ctx);
 void bt_gateway_stop(gw_ctx_t *ctx);
 void bt_gateway_destroy(gw_ctx_t *ctx);
@@ -87,6 +89,7 @@ static bt_risk_in_queue_t   g_risk_in_q;       /* OMS → Risk */
 static bt_seq_in_queue_t    g_seq_in_q;        /* Risk → Sequencer */
 static bt_match_in_queue_t  g_match_in_q[BT_CFG_MATCHING_THREADS]; /* Seq → Match */
 static bt_md_tick_queue_t   g_md_q[BT_CFG_MATCHING_THREADS];       /* Match → MD */
+static bt_gw_response_queue_t g_response_q;                          /* Match → Gateway */
 
 static void *g_seq_out_queues[BT_CFG_MATCHING_THREADS];
 
@@ -114,6 +117,7 @@ int main(int argc, char **argv)
 {
     bt_config_default(&g_cfg);
 
+    /* ── CLI argument parsing ────────────────────────────────────────── */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--bench") == 0 && i + 1 < argc)
             g_cfg.benchmark_orders = atoi(argv[++i]);
@@ -125,7 +129,28 @@ int main(int argc, char **argv)
             g_cfg.gateway_port = atoi(argv[++i]);
         else if (strcmp(argv[i], "--matching-threads") == 0 && i + 1 < argc)
             g_cfg.matching_threads = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--isolated") == 0)
+            g_cfg.use_isolated = 1;
     }
+
+    /* ── Validate configuration ─────────────────────────────────────── */
+    if (g_cfg.matching_threads < 1 || g_cfg.matching_threads > 8) {
+        fprintf(stderr, "FATAL: matching_threads must be 1-8\n"); return 1;
+    }
+    if (g_cfg.risk_threads < 1 || g_cfg.risk_threads > 8) {
+        fprintf(stderr, "FATAL: risk_threads must be 1-8\n"); return 1;
+    }
+    /* num_shards must be a power of 2 for bitmask routing */
+    if ((g_cfg.matching_threads & (g_cfg.matching_threads - 1)) != 0) {
+        fprintf(stderr, "FATAL: matching_threads must be a power of 2\n"); return 1;
+    }
+    /* Generate CPU core assignments algorithmically to avoid out-of-bounds */
+    for (int i = 0; i < g_cfg.matching_threads; i++)
+        g_cfg.cpu_match_cores[i] = g_cfg.cpu_start_core + 6 + i;
+    for (int i = 0; i < g_cfg.risk_threads; i++)
+        g_cfg.cpu_risk_cores[i] = g_cfg.cpu_start_core + 4 + i;
+    g_cfg.cpu_io_cores[0] = g_cfg.cpu_start_core + 2;
+    g_cfg.cpu_io_cores[1] = g_cfg.cpu_start_core + 3;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa)); sa.sa_handler = sig_handler;
@@ -147,6 +172,17 @@ int main(int argc, char **argv)
     /* ── Journal ────────────────────────────────────────────────────── */
     g_journal = bt_journal_open(g_cfg.journal_path, g_cfg.journal_sync_ms);
 
+    /* ── Crash Recovery (Round 4) ───────────────────────────────────── */
+    {
+        uint64_t recov_seq = 0, recov_orders = 0, recov_trades = 0;
+        int rc = bt_recovery_replay(g_cfg.journal_path,
+                                     &recov_seq, &recov_orders, &recov_trades);
+        if (rc == 0) {
+            BT_LOG_INFO("Recovery: seq=%lu orders=%lu trades=%lu",
+                         recov_seq, recov_orders, recov_trades);
+        }
+    }
+
     /* ── V5 Event Bus ───────────────────────────────────────────────── */
     g_event_bus = bt_event_bus_create(65536);
 
@@ -155,6 +191,7 @@ int main(int argc, char **argv)
     BT_MPSC_QUEUE_INIT(g_gate_oms_q);
     BT_MPSC_QUEUE_INIT(g_risk_in_q);
     BT_MPSC_QUEUE_INIT(g_seq_in_q);
+    BT_MPSC_QUEUE_INIT(g_response_q);
     for (int i = 0; i < g_cfg.matching_threads; i++) {
         BT_MPSC_QUEUE_INIT(g_match_in_q[i]);
         BT_SPSC_QUEUE_INIT(g_md_q[i]);
@@ -178,7 +215,8 @@ int main(int argc, char **argv)
         bt_mempool_arena_t *arena = bt_mempool_assign_arena(&g_mempool);
         g_matchers[i] = bt_matching_create(i, g_cfg.cpu_match_cores[i],
                                             &g_match_in_q[i], &g_md_q[i],
-                                            arena, g_journal, g_event_bus);
+                                            arena, g_journal, g_event_bus,
+                                            &g_response_q);
         if (g_matchers[i]) bt_matching_start(g_matchers[i]);
     }
 
@@ -213,7 +251,8 @@ int main(int argc, char **argv)
 
     /* 8. Gateway (V5: outputs to Order Gate, not directly to OMS) */
     g_gateway = bt_gateway_create(0, g_cfg.cpu_io_cores[0], g_cfg.gateway_port,
-                                   g_cfg.max_connections, &g_gate_out_q);
+                                   g_cfg.max_connections, &g_gate_out_q,
+                                   &g_response_q);
     if (g_gateway) bt_gateway_start(g_gateway);
 
     BT_LOG_INFO("V5 pipeline: GW→Gate→OMS→Risk→Seq→Match×%d→MD→EventBus→Clearing",

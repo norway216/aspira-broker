@@ -68,6 +68,8 @@ typedef struct {
     uint64_t trade_id;
     uint64_t buy_order_id;
     uint64_t sell_order_id;
+    uint64_t buy_user_id;         /* FIX (2026-06): for correct clearing */
+    uint64_t sell_user_id;        /* FIX (2026-06): for correct clearing */
     double   price;
     uint32_t quantity;
     uint64_t timestamp;
@@ -145,6 +147,14 @@ typedef struct {
     bt_order_type_t type;
     uint64_t        timestamp;
 } bt_order_request_t;
+
+/* ── Cancel Request (from gateway to matching engine) ──────────────── */
+typedef struct {
+    uint64_t        order_id;       /* ID of the order to cancel */
+    uint64_t        user_id;        /* user requesting the cancel */
+    char            symbol[16];     /* symbol of the order */
+    uint64_t        timestamp;      /* arrival time */
+} bt_cancel_request_t;
 
 /* ── Order Response (back to gateway) ──────────────────────────────── */
 typedef struct {
