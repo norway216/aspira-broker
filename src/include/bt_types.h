@@ -68,6 +68,8 @@ typedef struct {
     uint64_t trade_id;
     uint64_t buy_order_id;
     uint64_t sell_order_id;
+    uint64_t buy_user_id;         /* FIX (2026-06): for correct clearing */
+    uint64_t sell_user_id;        /* FIX (2026-06): for correct clearing */
     double   price;
     uint32_t quantity;
     uint64_t timestamp;

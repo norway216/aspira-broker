@@ -29,6 +29,8 @@
  *    avoids expensive string parsing for high-throughput clients.
  */
 
+#define GW_IDLE_TIMEOUT_NS  60000000000UL  /* 60 seconds idle timeout */
+
 /* ── Connection state ──────────────────────────────────────────────── */
 typedef enum { GW_CONN_READING, GW_CONN_CLOSING } gw_conn_state_t;
 
@@ -299,23 +301,33 @@ static void gw_process_data(gw_ctx_t *ctx, gw_conn_t *conn)
         size_t payload_len = msg_len - 5;
 
         if (msg_type == 'O' || msg_type == 'B') {
-            /* Extract payload into a temporary buffer.
-             * For binary ('B'), we could zero-copy from the ring, but
-             * payload is at most 64KB (BT_CFG_RECV_BUF_SIZE) and the
-             * common case is a single message per read anyway. */
-            uint8_t payload_buf[BT_CFG_RECV_BUF_SIZE];
-            if (payload_len <= sizeof(payload_buf)) {
-                gw_ring_peek(conn, 5, payload_buf, payload_len);
+            /* OPT: Heap buffer instead of 64KB on stack.
+             * Typical order payloads are < 256 bytes; use a conservative
+             * 8KB stack buffer and fall back to heap for rare large payloads. */
+            uint8_t  small_buf[8192];
+            uint8_t *payload_buf = small_buf;
+            int      need_free   = 0;
 
-                bt_order_request_t req;
-                int ok = (msg_type == 'B')
-                    ? gw_parse_order_binary(payload_buf, payload_len, &req)
-                    : gw_parse_order_text(payload_buf, payload_len, &req);
-
-                if (ok == 0) {
-                    gw_push_order(ctx, conn, &req);
+            if (payload_len > sizeof(small_buf)) {
+                payload_buf = (uint8_t *)malloc(payload_len);
+                if (!payload_buf) {
+                    conn->state = GW_CONN_CLOSING; return;
                 }
+                need_free = 1;
             }
+
+            gw_ring_peek(conn, 5, payload_buf, payload_len);
+
+            bt_order_request_t req;
+            int ok = (msg_type == 'B')
+                ? gw_parse_order_binary(payload_buf, payload_len, &req)
+                : gw_parse_order_text(payload_buf, payload_len, &req);
+
+            if (ok == 0) {
+                gw_push_order(ctx, conn, &req);
+            }
+
+            if (need_free) free(payload_buf);
         }
 
         /* Consume the message (O(1) — no memmove) */
@@ -381,6 +393,15 @@ static void *gw_thread_core(void *arg)
                     conn->fd = -1;  /* mark slot as free for reuse */
                     ctx->active_conns--;
                 }
+            }
+        }
+
+        /* Periodic idle-timeout scan (runs every epoll_wait iteration) */
+        uint64_t now = bt_timer_now_ns();
+        for (int c = 0; c < ctx->max_conns; c++) {
+            if (ctx->conns[c].fd >= 0 &&
+                now - ctx->conns[c].last_active > GW_IDLE_TIMEOUT_NS) {
+                ctx->conns[c].state = GW_CONN_CLOSING;
             }
         }
     }

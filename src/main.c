@@ -114,6 +114,7 @@ int main(int argc, char **argv)
 {
     bt_config_default(&g_cfg);
 
+    /* ── CLI argument parsing ────────────────────────────────────────── */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--bench") == 0 && i + 1 < argc)
             g_cfg.benchmark_orders = atoi(argv[++i]);
@@ -126,6 +127,25 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--matching-threads") == 0 && i + 1 < argc)
             g_cfg.matching_threads = atoi(argv[++i]);
     }
+
+    /* ── Validate configuration ─────────────────────────────────────── */
+    if (g_cfg.matching_threads < 1 || g_cfg.matching_threads > 8) {
+        fprintf(stderr, "FATAL: matching_threads must be 1-8\n"); return 1;
+    }
+    if (g_cfg.risk_threads < 1 || g_cfg.risk_threads > 8) {
+        fprintf(stderr, "FATAL: risk_threads must be 1-8\n"); return 1;
+    }
+    /* num_shards must be a power of 2 for bitmask routing */
+    if ((g_cfg.matching_threads & (g_cfg.matching_threads - 1)) != 0) {
+        fprintf(stderr, "FATAL: matching_threads must be a power of 2\n"); return 1;
+    }
+    /* Generate CPU core assignments algorithmically to avoid out-of-bounds */
+    for (int i = 0; i < g_cfg.matching_threads; i++)
+        g_cfg.cpu_match_cores[i] = g_cfg.cpu_start_core + 6 + i;
+    for (int i = 0; i < g_cfg.risk_threads; i++)
+        g_cfg.cpu_risk_cores[i] = g_cfg.cpu_start_core + 4 + i;
+    g_cfg.cpu_io_cores[0] = g_cfg.cpu_start_core + 2;
+    g_cfg.cpu_io_cores[1] = g_cfg.cpu_start_core + 3;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa)); sa.sa_handler = sig_handler;
