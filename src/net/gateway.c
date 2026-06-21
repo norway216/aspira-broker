@@ -280,16 +280,10 @@ static void gw_drain_responses(gw_ctx_t *ctx)
 {
     bt_order_response_t resp;
     while (BT_MPSC_POP(*ctx->response_queue, &resp)) {
-        /* Find connection by user_id / request_id.
-         * Simplification: broadcast to all authenticated connections.
-         * In production, maintain a request_id → conn mapping. */
-        for (int i = 0; i < ctx->max_conns; i++) {
-            if (ctx->conns[i].fd >= 0 && ctx->conns[i].authenticated &&
-                ctx->conns[i].auth_user_id == resp.request_id / 1000000) {
-                gw_send_to_conn(&ctx->conns[i], &resp);
-            }
-        }
-        /* Also send to any benchmark connection (user_id 0) */
+        /* Route response by request_id: send to the connection
+         * whose auth_user_id matches the request's origin.
+         * Simplified: broadcast to all authenticated connections
+         * for demo purposes (no request_id→conn mapping yet). */
         for (int i = 0; i < ctx->max_conns; i++) {
             if (ctx->conns[i].fd >= 0 && ctx->conns[i].authenticated)
                 gw_send_to_conn(&ctx->conns[i], &resp);

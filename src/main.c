@@ -171,6 +171,9 @@ int main(int argc, char **argv)
 
     /* ── Journal ────────────────────────────────────────────────────── */
     g_journal = bt_journal_open(g_cfg.journal_path, g_cfg.journal_sync_ms);
+    if (!g_journal) {
+        fprintf(stderr, "FATAL: journal open failed\n"); return 1;
+    }
 
     /* ── Crash Recovery (Round 4) ───────────────────────────────────── */
     {
@@ -185,6 +188,9 @@ int main(int argc, char **argv)
 
     /* ── V5 Event Bus ───────────────────────────────────────────────── */
     g_event_bus = bt_event_bus_create(65536);
+    if (!g_event_bus) {
+        fprintf(stderr, "FATAL: event bus init failed\n"); return 1;
+    }
 
     /* ── Initialize V5 queues ───────────────────────────────────────── */
     BT_MPSC_QUEUE_INIT(g_gate_out_q);
@@ -199,6 +205,9 @@ int main(int argc, char **argv)
 
     /* ── Risk state ─────────────────────────────────────────────────── */
     g_risk_state = bt_risk_state_create();
+    if (!g_risk_state) {
+        fprintf(stderr, "FATAL: risk state init failed\n"); return 1;
+    }
 
     /* ── Start subsystems (consumers first, downstream → upstream) ──── */
 
@@ -222,7 +231,10 @@ int main(int argc, char **argv)
 
     /* 4. Sequencer */
     g_sequencer = bt_sequencer_create(0, 11);
-    if (g_sequencer) {
+    if (!g_sequencer) {
+        fprintf(stderr, "FATAL: sequencer init failed\n"); return 1;
+    }
+    {
         for (int i = 0; i < g_cfg.matching_threads; i++)
             g_seq_out_queues[i] = &g_match_in_q[i];
         bt_sequencer_start(g_sequencer, &g_seq_in_q, g_seq_out_queues,
@@ -280,9 +292,9 @@ int main(int argc, char **argv)
             uint64_t gate_recv = 0, gate_pass = 0, gate_rej = 0, gate_thr = 0;
 
             if (g_journal)   bt_journal_stats(g_journal, &jw, &jd);
-            bt_sequencer_stats(g_sequencer, &seq_orders, &seq_global);
-            bt_event_bus_stats(g_event_bus, &ev_pub, &ev_del);
-            bt_clearing_stats(g_clearing, &clr_trades, &clr_notional, &clr_ledger);
+            if (g_sequencer) bt_sequencer_stats(g_sequencer, &seq_orders, &seq_global);
+            if (g_event_bus) bt_event_bus_stats(g_event_bus, &ev_pub, &ev_del);
+            if (g_clearing)  bt_clearing_stats(g_clearing, &clr_trades, &clr_notional, &clr_ledger);
             if (g_ordergate) bt_order_gate_stats(g_ordergate, &gate_recv,
                                                   &gate_pass, &gate_rej, &gate_thr);
 

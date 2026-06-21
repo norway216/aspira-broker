@@ -101,8 +101,8 @@ typedef struct {
 
     int     cpu_start_core;   /* first core to pin threads to */
     int     cpu_io_cores[4];
-    int     cpu_risk_cores[4];
-    int     cpu_match_cores[4];
+    int     cpu_risk_cores[8];
+    int     cpu_match_cores[8];
 
     int     log_level;        /* 0=err, 1=warn, 2=info, 3=debug */
     int     run_benchmark;
