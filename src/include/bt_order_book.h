@@ -101,6 +101,12 @@ int bt_order_book_order_count(const bt_order_book_t *book);
  */
 const char *bt_order_book_symbol(const bt_order_book_t *book);
 
+/**
+ * V11: Compute deterministic state checksum for verification.
+ * Hash covers all resting orders (order_id, price, quantity).
+ */
+uint64_t bt_order_book_checksum(const bt_order_book_t *book);
+
 #ifdef __cplusplus
 }
 #endif

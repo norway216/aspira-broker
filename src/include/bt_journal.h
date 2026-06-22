@@ -23,10 +23,15 @@ typedef enum {
     BT_JOURNAL_SNAPSHOT     = 3
 } bt_journal_entry_type_t;
 
+#define BT_JOURNAL_VERSION 1  /* V11: format version for backward compat */
+
 typedef struct {
+    uint32_t               version;    /* V11: format version (0=legacy) */
+    uint32_t               _reserved;
     uint64_t               seq_num;
     bt_journal_entry_type_t type;
     uint64_t               timestamp;
+    uint64_t               checksum;   /* V11: FNV-1a over data union */
     union {
         bt_order_t order;
         bt_trade_t trade;
