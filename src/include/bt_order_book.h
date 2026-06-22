@@ -64,7 +64,7 @@ bt_order_node_t *bt_order_book_cancel(bt_order_book_t *book, uint64_t order_id);
  */
 uint32_t bt_order_book_match(bt_order_book_t *book,
                               bt_side_t side,
-                              double price,
+                              bt_price_t price,
                               uint32_t quantity,
                               bt_order_type_t type,
                               uint64_t order_id,
@@ -76,12 +76,12 @@ uint32_t bt_order_book_match(bt_order_book_t *book,
 /**
  * Get the best bid price (0 if no bids).
  */
-double bt_order_book_best_bid(const bt_order_book_t *book);
+bt_price_t bt_order_book_best_bid(const bt_order_book_t *book);
 
 /**
  * Get the best ask price (0 if no asks).
  */
-double bt_order_book_best_ask(const bt_order_book_t *book);
+bt_price_t bt_order_book_best_ask(const bt_order_book_t *book);
 
 /**
  * Get a snapshot of the order book (top N levels).

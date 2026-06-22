@@ -31,14 +31,14 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
     /* Generate symbols (dynamically allocate for variable count) */
     int sym_count = num_symbols < 1 ? 1 : (num_symbols > 256 ? 256 : num_symbols);
     char (*symbols)[16] = (char(*)[16])malloc(sym_count * 16);
-    double *base_prices = (double *)malloc(sym_count * sizeof(double));
+    bt_price_t *base_prices = (bt_price_t *)malloc(sym_count * sizeof(bt_price_t));
     if (!symbols || !base_prices) {
         free(symbols); free(base_prices);
         fprintf(stderr, "[bench] malloc failed\n"); return;
     }
     for (int i = 0; i < sym_count; i++) {
         snprintf(symbols[i], 16, "SYM%04d", i);
-        base_prices[i] = 100.0 + (double)(xorshift64() % 90000) / 100.0;
+        base_prices[i] = BT_PRICE_FROM_DOUBLE(100.0 + (double)(xorshift64() % 90000) / 100.0);
     }
 
     /* Latency tracking: measure intervals between successive pushes.
@@ -72,18 +72,18 @@ void bt_benchmark_run(int num_orders, int num_symbols, bt_gw_oms_queue_t *queue)
         uint64_t r = xorshift64() % 100;
         if (r < 60) {
             req.type = BT_TYPE_LIMIT;
-            double delta = (double)((int64_t)(xorshift64() % 201) - 100) / 100.0;
+            bt_price_t delta = BT_PRICE_FROM_DOUBLE((double)((int64_t)(xorshift64() % 201) - 100) / 100.0);
             req.price = base_prices[sym_idx] + delta;
-            if (req.price <= 0.0) req.price = base_prices[sym_idx];
+            if (req.price <= BT_PRICE_ZERO) req.price = base_prices[sym_idx];
             base_prices[sym_idx] = req.price;
         } else if (r < 80) {
-            req.type = BT_TYPE_MARKET; req.price = 0.0;
+            req.type = BT_TYPE_MARKET; req.price = BT_PRICE_ZERO;
         } else if (r < 90) {
             req.type = BT_TYPE_IOC;
-            req.price = base_prices[sym_idx] + (double)((int64_t)(xorshift64() % 51) - 25) / 100.0;
+            req.price = base_prices[sym_idx] + BT_PRICE_FROM_DOUBLE((double)((int64_t)(xorshift64() % 51) - 25) / 100.0);
         } else {
             req.type = BT_TYPE_FOK;
-            req.price = base_prices[sym_idx] + (double)((int64_t)(xorshift64() % 51) - 25) / 100.0;
+            req.price = base_prices[sym_idx] + BT_PRICE_FROM_DOUBLE((double)((int64_t)(xorshift64() % 51) - 25) / 100.0);
         }
 
         req.side = ((xorshift64() % 2) == 0) ? BT_SIDE_BUY : BT_SIDE_SELL;
