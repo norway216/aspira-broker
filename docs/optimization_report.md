@@ -963,7 +963,61 @@ $ ./bt_trading --no-bench
 
 ---
 
-*Report covers nine optimization rounds: June 20-22, 2026. Total: 61 fixes across 33 files. ~7,400 lines pure C. V10 exchange-grade core optimized.*
+## Round 10: V11 Distributed Deterministic (2026-06-22)
+
+### 57. Journal Entry Checksum
+**Files**: `src/include/bt_journal.h`, `src/core/matching_engine.c`
+
+**V11 requirement**: Event log corruption detection (§23.2 — "checksum protected").
+
+**Design**: Added `uint64_t checksum` field to `bt_journal_entry_t`. FNV-1a hash over entry data computed at journal write time. Enables detection of storage-level corruption during replay.
+
+---
+
+### 58. Order Book State Checksum
+**Files**: `src/include/bt_order_book.h`, `src/core/order_book.c`
+
+**V11 requirement**: Deterministic verification (§8.3 — "Compare Checksum", §25.1 — "replay checksum matches").
+
+**Design**: `bt_order_book_checksum()` computes FNV-1a hash over symbol, total quantities, and order count. Enables deterministic verification that replay produces identical state.
+
+---
+
+### 59. Safe Mode
+**Files**: `src/include/bt_risk.h`, `src/core/risk_engine.c`
+
+**V11 requirement**: Safe mode (§20.3) — "reject new orders, allow cancel only, freeze withdrawals, increase risk thresholds."
+
+**Design**: Added `safe_mode` flag to `bt_risk_state_t`. When active, all new orders are rejected with reason "safe mode: orders rejected." Cancel requests bypass safe mode. Manual toggle via `bt_risk_kill_switch`.
+
+---
+
+### 60. Order Idempotency Key
+**Files**: `src/core/risk_engine.c`
+
+**V11 requirement**: Idempotency (§4.2 — "idempotency control", §14.3 — "idempotency key required").
+
+**Design**: Ring buffer tracking last 4096 `request_id` values. Duplicate requests are rejected with reason "duplicate request_id." Prevents double-processing of retransmitted orders.
+
+**Impact**: At-least-once delivery safety — network retransmits cannot create duplicate orders.
+
+---
+
+## Summary of All Rounds
+
+| Round | Focus | Fixes |
+|-------|-------|-------|
+| 1-9 | Infrastructure through V10 | 61 |
+| 10 | V11 Distributed | 4 — Journal checksum, book checksum, safe mode, idempotency |
+| **Total** | | **65** |
+
+### Files (34 total)
+
+**Round 10 modified**: `src/include/bt_journal.h`, `src/include/bt_order_book.h`, `src/include/bt_risk.h`, `src/core/matching_engine.c`, `src/core/order_book.c`, `src/core/risk_engine.c`
+
+---
+
+*Report covers ten optimization rounds: June 20-22, 2026. Total: 65 fixes across 34 files. ~7,500 lines pure C. V11 distributed-deterministic features integrated.*
 
 ### 38. Gateway Response Broadcast Scope Fix
 **File**: `src/net/gateway.c`

@@ -109,6 +109,7 @@ typedef struct {
     int     benchmark_orders;
     int     benchmark_symbols;
     int     use_isolated;      /* use process isolation for matching */
+    int     safe_mode;         /* V11: reject new orders, allow cancels */
 } bt_runtime_config_t;
 
 /* Default runtime config */

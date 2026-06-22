@@ -32,6 +32,7 @@ typedef struct {
 typedef struct bt_risk_state {
     int                  kill_switch;       /* __atomic_* access */
     int                  breaker_active;    /* circuit breaker tripped? */
+    int                  safe_mode;         /* V11: reject orders, allow cancel */
     uint64_t             total_checked;     /* __atomic_* access */
     uint64_t             total_passed;      /* __atomic_* access */
     uint64_t             total_rejected;    /* __atomic_* access */
@@ -43,6 +44,9 @@ typedef struct bt_risk_state {
     bt_risk_user_exposure_t *user_exposures;
     int                  num_user_exposures;
     int                  max_user_exposures;
+    /* V11: Idempotency ring (shared across workers) */
+    uint64_t             idem_ring[4096];
+    int                  idem_idx;
     /* Per-symbol positions */
     bt_risk_position_t  *positions;
     int                  num_positions;
@@ -65,6 +69,7 @@ typedef struct bt_risk_worker {
 bt_risk_state_t  *bt_risk_state_create(void);
 void              bt_risk_state_destroy(bt_risk_state_t *s);
 void              bt_risk_kill_switch(bt_risk_state_t *s, int on);
+void              bt_risk_safe_mode(bt_risk_state_t *s, int on);  /* V11 */
 
 bt_risk_worker_t *bt_risk_worker_create(int wid, int cpu,
                                          bt_risk_in_queue_t *in,

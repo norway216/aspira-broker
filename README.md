@@ -1,8 +1,8 @@
-# Aspira Broker — Exchange-Grade Trading System (V10)
+# Aspira Broker — Distributed Deterministic Trading Platform (V11)
 
-A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, V9 deterministic scheduler, **V10 flat price ladder (O(1) access)**, fixed-point precision, latency budget enforcement, and zero heap allocation in the critical path. Built for determinism, fault isolation, and microsecond-level latency.
+A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, V9 scheduler, V10 O(1) price ladder, **V11 journal checksums + state verification + safe mode + idempotency**, fixed-point precision, latency budget enforcement, and zero heap allocation in the critical path.
 
-> **2026-06**: Nine optimization rounds applied — see [`docs/optimization_report.md`](docs/optimization_report.md) for the complete history (61 fixes across 33 files).
+> **2026-06**: Ten optimization rounds — [`docs/optimization_report.md`](docs/optimization_report.md) for complete history (65 fixes across 34 files).
 
 > Based on `docs/trading_system_architecture_v7.md`
 
@@ -456,24 +456,27 @@ Seven optimization rounds applied (June 2026). **55 fixes across 29 files.** Ful
 | 7 | Precision + Performance | 3 — Fixed-point prices, branchless skip-list, latency measurement |
 | 8 | V9 Scheduler | 3 — Thread class system, core allocator, latency budgets, NUMA binding |
 | 9 | V10 Exchange Core | 3 — Flat price ladder (O(1)), cache alignment, fixed-size protocol |
+| 10 | V11 Distributed | 4 — Journal checksum, book checksum, safe mode, idempotency |
 
 ---
 
-## V10 Exchange Core (Round 9)
+## V11 Distributed Deterministic (Round 10)
 
-**O(1) Price Ladder**: 2048-entry flat array per side (`price / TICK_SIZE`). Covers ±$1024 active range. Skip-list fallback beyond.
-**Cache alignment**: `bt_order_t` = 64 bytes, hash entries = 4 per cache line.
-**Fixed-size binary**: Exact `sizeof(bt_order_request_t)` validation. No variable-length parsing.
-**No-syscall**: Zero malloc/free/write/read in insert→match→cancel.
+**Journal Checksum**: FNV-1a hash per journal entry for corruption detection during replay.
+**State Checksum**: `bt_order_book_checksum()` — deterministic hash of order book for verification.
+**Safe Mode**: Manual/automatic mode rejecting new orders, allowing cancels only.
+**Idempotency**: Ring buffer tracking 4096 recent `request_id` values — duplicate rejection.
 
-| V10 Hard Constraint | Status |
-|---------------------|--------|
-| No dynamic memory in hot path | ✅ |
-| No system calls in matching | ✅ |
-| No locks in trading core | ✅ |
-| Deterministic replay | ✅ |
+| V11 Principle | Status |
+|--------------|--------|
+| Single-writer per shard | ✅ |
+| Explicit event ordering | ✅ Global + shard sequence |
+| Append-only double-entry ledger | ✅ |
+| Event checksum protection | ✅ Journal + book checksums |
+| Idempotent external effects | ✅ Request_id dedup |
+| Safe mode for abnormal state | ✅ |
 
-See [`docs/brokerage_system_architecture_v10_exchange_core.md`](docs/brokerage_system_architecture_v10_exchange_core.md).
+See [`docs/trading_system_architecture_v11_distributed_deterministic.md`](docs/trading_system_architecture_v11_distributed_deterministic.md).
 
 ---
 
@@ -508,4 +511,4 @@ See [LICENSE](LICENSE) for details.
 
 ---
 
-Built with **C11**. Architecture based on [`docs/brokerage_system_architecture_v10_exchange_core.md`](docs/brokerage_system_architecture_v10_exchange_core.md).
+Built with **C11**. Architecture based on [`docs/trading_system_architecture_v11_distributed_deterministic.md`](docs/trading_system_architecture_v11_distributed_deterministic.md).

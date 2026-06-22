@@ -32,7 +32,8 @@
 #include <fcntl.h>
 
 #define GW_IDLE_TIMEOUT_NS   60000000000UL
-#define GW_SEND_RING_SIZE    65536      /* per-connection send buffer (must be pow2) */
+#define GW_SEND_RING_SIZE    65536
+#define GW_IDEM_RING_SIZE    8192       /* power of 2, O(1) idempotency */
 
 /* ── Simple API key whitelist (demo/R&D) ──────────────────────────── */
 #define BT_API_KEY_LEN  32
@@ -82,6 +83,9 @@ typedef struct {
     int                   active_conns;
     pthread_t             thread;
     uint64_t              orders_received;
+    /* V11: O(1) idempotency ring */
+    uint64_t              idem_ring[GW_IDEM_RING_SIZE];
+    int                   idem_idx;
     int sched_id;
 } gw_ctx_t;
 
@@ -166,6 +170,15 @@ static inline void gw_push_order(gw_ctx_t *ctx, gw_conn_t *conn, const bt_order_
     uint64_t now = bt_timer_now_ns();
     if (now - conn->rate_window_start > 1000000000UL) { conn->rate_window_start = now; conn->rate_count = 0; }
     if (conn->rate_count < BT_CFG_RATE_LIMIT_RPS) {
+        /* V11: O(1) idempotency — direct-index ring buffer.
+         * request_id modulo RING_SIZE indexes into the ring.
+         * Collision (different ID maps to same slot) → false reject is possible
+         * but extremely rare with 8192 slots and random IDs. */
+        if (req->request_id != 0) {
+            int slot = (int)(req->request_id & (GW_IDEM_RING_SIZE - 1));
+            if (ctx->idem_ring[slot] == req->request_id) return; /* duplicate */
+            ctx->idem_ring[slot] = req->request_id;
+        }
         conn->rate_count++;
         bt_gw_oms_msg_t msg; memset(&msg, 0, sizeof(msg));
         msg.msg_type = 'O'; msg.request = *req; msg.seq_num = 0;
