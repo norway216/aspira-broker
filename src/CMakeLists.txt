@@ -1,28 +1,21 @@
 cmake_minimum_required(VERSION 3.16)
-project(bt_trading_system VERSION 2.0.0 LANGUAGES C CXX)
+project(bt_trading_system VERSION 2.0.0 LANGUAGES C)
 
 # ── Compiler Settings ──────────────────────────────────────────────────
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optimization flags
 # NOTE: -ffast-math is intentionally NOT used — this is a financial system
 # and IEEE 754 compliance is required for correct price calculations.
-# -ffast-math breaks NaN/Inf handling, changes comparison semantics, and
-# can reorder floating-point operations in ways that produce wrong prices.
 set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -funroll-loops")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto -DNDEBUG -funroll-loops")
 
 # Common flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers")
 
 # Debug flags
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -fsanitize=address,undefined")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -fsanitize=address,undefined")
 
 # Link-time optimization
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
@@ -30,9 +23,8 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
 # ── Include directories ───────────────────────────────────────────────
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
-# ── Source files ──────────────────────────────────────────────────────
+# ── Source files (all pure C, V7 compliant) ────────────────────────────
 
-# C core modules (V5: added order_gate, event_bus, clearing)
 set(C_SOURCES
     utils/memory_pool.c
     utils/timer.c
@@ -49,6 +41,8 @@ set(C_SOURCES
     core/clearing.c
     core/shard_ipc.c
     core/recovery.c
+    core/order_book.c
+    core/matching_engine.c
     utils/memory_tier.c
     net/gateway.c
     md/market_data.c
@@ -57,19 +51,13 @@ set(C_SOURCES
     ${CMAKE_SOURCE_DIR}/../bench/benchmark.c
 )
 
-# C++ core modules
-set(CXX_SOURCES
-    core/order_book.cpp
-    core/matching_engine.cpp
-)
-
-# Main entry point (C, but links with C++ libs)
+# Main entry point
 set(MAIN_SOURCE main.c)
 
 # ── Build targets ─────────────────────────────────────────────────────
 
-# Core library (C objects + C++ objects)
-add_library(bt_core STATIC ${C_SOURCES} ${CXX_SOURCES})
+# Core library (C objects only)
+add_library(bt_core STATIC ${C_SOURCES})
 target_link_libraries(bt_core PUBLIC pthread rt)
 
 # Link with numa if available

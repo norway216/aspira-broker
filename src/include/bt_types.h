@@ -9,6 +9,13 @@
 extern "C" {
 #endif
 
+/* ── Fixed-Point Price Type (V7: financial correctness) ────────────── */
+typedef int64_t bt_price_t;
+#define BT_PRICE_SCALE          1000000LL   /* 1e6: micro-dollar resolution */
+#define BT_PRICE_FROM_DOUBLE(d) ((bt_price_t)((d) * BT_PRICE_SCALE + 0.5))
+#define BT_PRICE_TO_DOUBLE(p)   ((double)(p) / BT_PRICE_SCALE)
+#define BT_PRICE_ZERO           ((bt_price_t)0)
+
 /* ── Compile-time constants ─────────────────────────────────────────── */
 #define BT_MAX_SYMBOLS       1024
 #define BT_MAX_SYMBOL_LEN    16
@@ -46,7 +53,7 @@ typedef struct {
     uint64_t order_id;            /*  8 bytes */
     uint64_t user_id;             /*  8 bytes */
     char     symbol[16];          /* 16 bytes */
-    double   price;               /*  8 bytes */
+    bt_price_t price;             /*  8 bytes — fixed-point micro-dollars */
     uint32_t quantity;            /*  4 bytes */
     uint32_t filled_qty;          /*  4 bytes */
     uint64_t timestamp;           /*  8 bytes */
@@ -70,7 +77,7 @@ typedef struct {
     uint64_t sell_order_id;
     uint64_t buy_user_id;         /* FIX (2026-06): for correct clearing */
     uint64_t sell_user_id;        /* FIX (2026-06): for correct clearing */
-    double   price;
+    bt_price_t price;
     uint32_t quantity;
     uint64_t timestamp;
 } bt_trade_t;
@@ -84,7 +91,7 @@ typedef struct bt_order_node {
 
 /* ── Price Level (FIFO queue of orders at same price) ──────────────── */
 typedef struct bt_price_level {
-    double            price;
+    bt_price_t        price;
     bt_order_node_t  *head;
     bt_order_node_t  *tail;
     uint32_t          order_count;
@@ -95,7 +102,7 @@ typedef struct bt_price_level {
 #define BT_SKIPLIST_MAX_LEVEL 16
 
 typedef struct bt_sl_node {
-    double              price;
+    bt_price_t          price;
     bt_price_level_t   *level;
     struct bt_sl_node  *forward[1]; /* flexible array, actual size = level */
 } bt_sl_node_t;
@@ -103,13 +110,13 @@ typedef struct bt_sl_node {
 /* ── Order Book Snapshot ───────────────────────────────────────────── */
 typedef struct {
     char     symbol[16];
-    double   best_bid;
-    double   best_ask;
+    bt_price_t best_bid;
+    bt_price_t best_ask;
     uint32_t bid_qty;
     uint32_t ask_qty;
-    double   bid_levels[10];
+    bt_price_t bid_levels[10];
     uint32_t bid_qtys[10];
-    double   ask_levels[10];
+    bt_price_t ask_levels[10];
     uint32_t ask_qtys[10];
     int      num_bid_levels;
     int      num_ask_levels;
@@ -128,7 +135,7 @@ typedef enum {
 typedef struct {
     bt_tick_type_t  type;
     char            symbol[16];
-    double          price;
+    bt_price_t        price;
     uint32_t        quantity;
     uint64_t        timestamp;
     uint64_t        trade_id;
@@ -141,7 +148,7 @@ typedef struct {
     uint64_t        request_id;
     uint64_t        user_id;
     char            symbol[16];
-    double          price;
+    bt_price_t        price;
     uint32_t        quantity;
     bt_side_t       side;
     bt_order_type_t type;

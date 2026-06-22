@@ -34,6 +34,7 @@ typedef struct bt_matching_ctx {
     uint64_t             orders_received;   /* set/read via __atomic_* */
     uint64_t             orders_matched;    /* set/read via __atomic_* */
     uint64_t             trades_generated;  /* set/read via __atomic_* */
+    uint64_t             lat_sum, lat_max, lat_count; /* V7 latency stats */
 } bt_matching_ctx_t;
 
 bt_matching_ctx_t *bt_matching_create(int tid, int cpu,
