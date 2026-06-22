@@ -56,7 +56,7 @@ typedef struct bt_clearing bt_clearing_t;
  * @param cpu_core   CPU core to pin to
  * @return Clearing handle, or NULL on failure
  */
-bt_clearing_t *bt_clearing_create(int thread_id, int cpu_core);
+bt_clearing_t *bt_clearing_create(int thread_id, int cpu_core, int sched_id);
 
 /**
  * Start the clearing engine thread.

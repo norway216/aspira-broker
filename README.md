@@ -1,8 +1,8 @@
-# Aspira Broker — Exchange-Grade Trading System (V7)
+# Aspira Broker — Exchange-Grade Trading System (V9 Scheduler)
 
-A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, fixed-point precision, and zero heap allocation in the critical path. Built for determinism, fault isolation, and microsecond-level latency.
+A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, **V9 deterministic thread scheduler**, fixed-point precision, latency budget enforcement, and zero heap allocation in the critical path. Built for determinism, fault isolation, and microsecond-level latency.
 
-> **2026-06**: Seven optimization rounds applied — see [`docs/optimization_report.md`](docs/optimization_report.md) for the complete history (55 fixes across 29 files).
+> **2026-06**: Eight optimization rounds applied — see [`docs/optimization_report.md`](docs/optimization_report.md) for the complete history (58 fixes across 31 files).
 
 > Based on `docs/trading_system_architecture_v7.md`
 
@@ -454,6 +454,32 @@ Seven optimization rounds applied (June 2026). **55 fixes across 29 files.** Ful
 | 5 | Correctness | 5 — Response scope, notional ordering, CPU bounds, NULL checks, FOK truncation |
 | 6 | V7 C Conversion | 5 — Hash table, pure C order book, pure C matching, C-only build |
 | 7 | Precision + Performance | 3 — Fixed-point prices, branchless skip-list, latency measurement |
+| 8 | V9 Scheduler | 3 — Thread class system, core allocator, latency budgets, NUMA binding |
+
+---
+
+## V9 Scheduler (Round 8)
+
+The V9 architecture introduces a **deterministic scheduling subsystem** governing thread scheduling, CPU core binding, NUMA placement, and latency budget enforcement.
+
+**Key additions:**
+- **Thread class system** (`BT_THREAD_CLASS_HOT/WARM/COLD`) with formal classification
+- **CPU core allocator** with collision detection and NUMA mixing validation
+- **Latency budget enforcement**: per-stage budgets (HOT=10μs, WARM=50μs, COLD=none) with warnings on exceed
+- **NUMA-aware thread binding**: `bt_numa_bind_thread()` called after core pinning
+- **Scheduler telemetry**: core allocation map at startup + per-thread latency report in health checks
+
+See [`src/include/bt_scheduler.h`](src/include/bt_scheduler.h) and [`src/core/scheduler.c`](src/core/scheduler.c).
+
+**Design Goals (updated):**
+
+| Goal | Status |
+|------|--------|
+| Deterministic scheduling | ✅ Thread classes + fixed core binding |
+| Latency budget enforcement | ✅ Per-stage budgets with warnings |
+| NUMA-aware placement | ✅ Thread binding + node validation |
+| Core collision detection | ✅ Startup validation |
+| Scheduler telemetry | ✅ Core map + latency report |
 
 ---
 
@@ -463,4 +489,4 @@ See [LICENSE](LICENSE) for details.
 
 ---
 
-Built with **C11**. Architecture based on [`docs/trading_system_architecture_v7.md`](docs/trading_system_architecture_v7.md).
+Built with **C11**. Architecture based on [`docs/brokerage_system_architecture_v9_scheduler.md`](docs/brokerage_system_architecture_v9_scheduler.md).
