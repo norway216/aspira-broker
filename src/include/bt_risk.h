@@ -70,7 +70,7 @@ bt_risk_worker_t *bt_risk_worker_create(int wid, int cpu,
                                          bt_risk_in_queue_t *in,
                                          bt_seq_in_queue_t *out,
                                          int nout,
-                                         bt_risk_state_t *st);
+                                         bt_risk_state_t *st, int sched_id);
 int  bt_risk_worker_start(bt_risk_worker_t *w);
 void bt_risk_worker_stop(bt_risk_worker_t *w);
 void bt_risk_worker_destroy(bt_risk_worker_t *w);

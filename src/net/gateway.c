@@ -150,10 +150,13 @@ static int gw_parse_order_text(const uint8_t *payload, size_t len, bt_order_requ
 
 static int gw_parse_order_binary(const uint8_t *payload, size_t len, bt_order_request_t *req)
 {
-    if (len < 48) return -1;
+    /* V10: fixed-size binary protocol validation (~56 bytes with padding) */
+    if (len < 48 || len > sizeof(bt_order_request_t)) return -1;
     memcpy(req, payload, sizeof(bt_order_request_t));
     req->timestamp = bt_timer_now_ns();
     if (!req->symbol[0] || !req->quantity) return -1;
+    if (req->side != BT_SIDE_BUY && req->side != BT_SIDE_SELL) return -1;
+    if (req->type > BT_TYPE_FOK) return -1;
     return 0;
 }
 

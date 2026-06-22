@@ -44,7 +44,8 @@ bt_matching_ctx_t *bt_matching_create(int tid, int cpu,
                                        bt_mempool_arena_t *arena,
                                        bt_journal_t *journal,
                                        bt_event_bus_t *event_bus,
-                                       bt_gw_response_queue_t *response_queue);
+                                       bt_gw_response_queue_t *response_queue,
+                                       int sched_id);
 int  bt_matching_start(bt_matching_ctx_t *ctx);
 void bt_matching_stop(bt_matching_ctx_t *ctx);
 void bt_matching_destroy(bt_matching_ctx_t *ctx);
