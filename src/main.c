@@ -162,7 +162,7 @@ int main(int argc, char **argv)
         BT_THREAD_CLASS_WARM, g_cfg.cpu_io_cores[0], 60, 200000);
     int sched_og  = bt_sched_register(&g_sched, "ordergate",
         BT_THREAD_CLASS_WARM, g_cfg.cpu_io_cores[1], 55, 100000);
-    int sched_oms = bt_sched_register(&g_sched, "oms",
+    int sched_oms __attribute__((unused)) = bt_sched_register(&g_sched, "oms",
         BT_THREAD_CLASS_WARM, g_cfg.cpu_risk_cores[0] - 1, 70, 200000);
     int sched_seq = bt_sched_register(&g_sched, "sequencer",
         BT_THREAD_CLASS_HOT,  11, 85, 5000);
@@ -260,7 +260,7 @@ int main(int argc, char **argv)
         g_matchers[i] = bt_matching_create(i, g_cfg.cpu_match_cores[i],
                                             &g_match_in_q[i], &g_md_q[i],
                                             arena, g_journal, g_event_bus,
-                                            &g_response_q);
+                                            &g_response_q, sched_match[i]);
         if (g_matchers[i]) { bt_matching_start(g_matchers[i]); }
     }
 
@@ -282,7 +282,7 @@ int main(int argc, char **argv)
         g_risk_workers[i] = bt_risk_worker_create(i, g_cfg.cpu_risk_cores[i],
                                                    &g_risk_in_q, &g_seq_in_q,
                                                    g_cfg.matching_threads,
-                                                   g_risk_state);
+                                                   g_risk_state, sched_risk[i]);
         if (g_risk_workers[i]) { bt_risk_worker_start(g_risk_workers[i]); }
     }
 

@@ -1,8 +1,8 @@
-# Aspira Broker — Exchange-Grade Trading System (V9 Scheduler)
+# Aspira Broker — Exchange-Grade Trading System (V10)
 
-A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, **V9 deterministic thread scheduler**, fixed-point precision, latency budget enforcement, and zero heap allocation in the critical path. Built for determinism, fault isolation, and microsecond-level latency.
+A high-performance, pure-C electronic trading platform with a 9-stage lock-free pipeline, global sequencing, event sourcing, V9 deterministic scheduler, **V10 flat price ladder (O(1) access)**, fixed-point precision, latency budget enforcement, and zero heap allocation in the critical path. Built for determinism, fault isolation, and microsecond-level latency.
 
-> **2026-06**: Eight optimization rounds applied — see [`docs/optimization_report.md`](docs/optimization_report.md) for the complete history (58 fixes across 31 files).
+> **2026-06**: Nine optimization rounds applied — see [`docs/optimization_report.md`](docs/optimization_report.md) for the complete history (61 fixes across 33 files).
 
 > Based on `docs/trading_system_architecture_v7.md`
 
@@ -455,6 +455,25 @@ Seven optimization rounds applied (June 2026). **55 fixes across 29 files.** Ful
 | 6 | V7 C Conversion | 5 — Hash table, pure C order book, pure C matching, C-only build |
 | 7 | Precision + Performance | 3 — Fixed-point prices, branchless skip-list, latency measurement |
 | 8 | V9 Scheduler | 3 — Thread class system, core allocator, latency budgets, NUMA binding |
+| 9 | V10 Exchange Core | 3 — Flat price ladder (O(1)), cache alignment, fixed-size protocol |
+
+---
+
+## V10 Exchange Core (Round 9)
+
+**O(1) Price Ladder**: 2048-entry flat array per side (`price / TICK_SIZE`). Covers ±$1024 active range. Skip-list fallback beyond.
+**Cache alignment**: `bt_order_t` = 64 bytes, hash entries = 4 per cache line.
+**Fixed-size binary**: Exact `sizeof(bt_order_request_t)` validation. No variable-length parsing.
+**No-syscall**: Zero malloc/free/write/read in insert→match→cancel.
+
+| V10 Hard Constraint | Status |
+|---------------------|--------|
+| No dynamic memory in hot path | ✅ |
+| No system calls in matching | ✅ |
+| No locks in trading core | ✅ |
+| Deterministic replay | ✅ |
+
+See [`docs/brokerage_system_architecture_v10_exchange_core.md`](docs/brokerage_system_architecture_v10_exchange_core.md).
 
 ---
 
@@ -489,4 +508,4 @@ See [LICENSE](LICENSE) for details.
 
 ---
 
-Built with **C11**. Architecture based on [`docs/brokerage_system_architecture_v9_scheduler.md`](docs/brokerage_system_architecture_v9_scheduler.md).
+Built with **C11**. Architecture based on [`docs/brokerage_system_architecture_v10_exchange_core.md`](docs/brokerage_system_architecture_v10_exchange_core.md).
