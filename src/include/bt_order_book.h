@@ -103,67 +103,6 @@ const char *bt_order_book_symbol(const bt_order_book_t *book);
 
 #ifdef __cplusplus
 }
-
-/* ── C++ class wrapper ─────────────────────────────────────────────── */
-
-#include <string>
-#include <unordered_map>
-#include <vector>
-#include <cstring>
-
-class OrderBook {
-public:
-    /* Internal skip-list-backed order book */
-    struct SlNode;
-
-    OrderBook(const char *sym) : symbol_(sym), bids_(nullptr), asks_(nullptr),
-                                   total_bid_qty_(0), total_ask_qty_(0) {
-        order_index_.reserve(65536);
-    }
-
-    ~OrderBook() { clear(); }
-
-    const std::string& symbol() const { return symbol_; }
-
-    /* Insert a limit order (called by matching engine).
-     * order_node is from memory pool, owned by the book */
-    int insert(bt_order_node_t *node);
-
-    /* Cancel an order, returns the node (for recycling) */
-    bt_order_node_t *cancel(uint64_t order_id);
-
-    /* Match an incoming aggressive order.
-     * Returns remaining unfilled quantity. Fills trades_out. */
-    uint32_t match(bt_side_t side, double price, uint32_t quantity,
-                   bt_order_type_t type, uint64_t order_id, uint64_t user_id,
-                   std::vector<bt_trade_t> &trades_out);
-
-    /* Accessors */
-    double best_bid() const;
-    double best_ask() const;
-    void snapshot(bt_order_book_snapshot_t &snap, int max_levels, uint64_t seq_num) const;
-    int order_count() const { return (int)order_index_.size(); }
-
-private:
-    void clear();
-
-    std::string symbol_;
-    SlNode *bids_;    /* skip list, descending */
-    SlNode *asks_;    /* skip list, ascending */
-    std::unordered_map<uint64_t, bt_order_node_t*> order_index_;
-    uint64_t total_bid_qty_;  /* cached sum for O(1) FOK check */
-    uint64_t total_ask_qty_;  /* cached sum for O(1) FOK check */
-
-    /* Skip list helpers.
-     * `ascending` flag controls sort: 1=ascending (asks), 0=descending (bids). */
-    static constexpr int SKIPLIST_MAX_LEVEL = BT_SKIPLIST_MAX_LEVEL;
-    SlNode *sl_insert(SlNode *head, double price, int ascending);
-    SlNode *sl_find(SlNode *head, double price, int ascending);
-    SlNode *sl_remove(SlNode *head, double price, int ascending);
-    void sl_destroy(SlNode *head);
-    int random_level();
-};
-
-#endif /* __cplusplus */
+#endif
 
 #endif /* BT_ORDER_BOOK_H */
