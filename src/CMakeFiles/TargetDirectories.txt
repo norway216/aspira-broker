@@ -1,0 +1,8 @@
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/install/strip.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/install/local.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/install.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/list_install_components.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/bt_trading.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/rebuild_cache.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/bt_core.dir
+/home/sa/Lab/Programming/aspira-broker/src/CMakeFiles/edit_cache.dir

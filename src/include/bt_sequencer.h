@@ -36,7 +36,7 @@ typedef struct bt_sequencer bt_sequencer_t;
  * @param cpu_core    CPU core to pin to
  * @return Sequencer handle, or NULL on failure
  */
-bt_sequencer_t *bt_sequencer_create(int thread_id, int cpu_core);
+bt_sequencer_t *bt_sequencer_create(int thread_id, int cpu_core, int sched_id);
 
 /**
  * Start the sequencer thread.

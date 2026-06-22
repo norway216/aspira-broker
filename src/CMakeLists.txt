@@ -41,6 +41,7 @@ set(C_SOURCES
     core/clearing.c
     core/shard_ipc.c
     core/recovery.c
+    core/scheduler.c
     core/order_book.c
     core/matching_engine.c
     utils/memory_tier.c

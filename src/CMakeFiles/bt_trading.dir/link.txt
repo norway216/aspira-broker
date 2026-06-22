@@ -1,0 +1,1 @@
+/usr/bin/cc  -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -O3 -march=native -flto -DNDEBUG -funroll-loops -flto -fno-fat-lto-objects CMakeFiles/bt_trading.dir/main.c.o -o bt_trading  libbt_core.a -lpthread -lrt /usr/lib/x86_64-linux-gnu/libnuma.so 

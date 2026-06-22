@@ -3,6 +3,7 @@
 #include "bt_queues.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
+#include "bt_scheduler.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,13 +19,14 @@ typedef struct {
     atomic_int          running;
     bt_md_tick_queue_t *in_queue;
     pthread_t          thread;
+    int                sched_id;
     uint64_t           tick_count;
 } bt_md_ctx_t;
 
 static void *md_thread(void *arg)
 {
     bt_md_ctx_t *ctx = (bt_md_ctx_t *)arg;
-    bt_cpu_pin_thread(ctx->cpu_core); bt_cpu_set_realtime(50);
+    bt_sched_apply(&g_sched, ctx->sched_id); 
     fprintf(stderr, "[md] core %d\n", ctx->cpu_core);
 
     while (atomic_load(&ctx->running)) {
@@ -36,11 +38,11 @@ static void *md_thread(void *arg)
     return NULL;
 }
 
-bt_md_ctx_t *bt_md_create(int tid, int cpu, bt_md_tick_queue_t *in)
+bt_md_ctx_t *bt_md_create(int tid, int cpu, bt_md_tick_queue_t *in, int sched_id)
 {
     bt_md_ctx_t *ctx = (bt_md_ctx_t *)calloc(1, sizeof(bt_md_ctx_t));
     if (!ctx) return NULL;
-    ctx->thread_id = tid; ctx->cpu_core = cpu; ctx->in_queue = in; atomic_init(&ctx->running, 1);
+    ctx->thread_id = tid; ctx->sched_id = sched_id; ctx->cpu_core = cpu; ctx->in_queue = in; atomic_init(&ctx->running, 1);
     return ctx;
 }
 int  bt_md_start(bt_md_ctx_t *ctx) { return ctx ? pthread_create(&ctx->thread, NULL, md_thread, ctx) : -1; }

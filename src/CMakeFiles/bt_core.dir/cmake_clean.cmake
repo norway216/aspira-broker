@@ -1,0 +1,33 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/bt_core.dir/core/clearing.c.o"
+  "CMakeFiles/bt_core.dir/core/event_bus.c.o"
+  "CMakeFiles/bt_core.dir/core/matching_engine.c.o"
+  "CMakeFiles/bt_core.dir/core/oms.c.o"
+  "CMakeFiles/bt_core.dir/core/order_book.c.o"
+  "CMakeFiles/bt_core.dir/core/order_gate.c.o"
+  "CMakeFiles/bt_core.dir/core/recovery.c.o"
+  "CMakeFiles/bt_core.dir/core/risk_engine.c.o"
+  "CMakeFiles/bt_core.dir/core/scheduler.c.o"
+  "CMakeFiles/bt_core.dir/core/sequencer.c.o"
+  "CMakeFiles/bt_core.dir/core/shard_ipc.c.o"
+  "CMakeFiles/bt_core.dir/home/sa/Lab/Programming/aspira-broker/bench/benchmark.c.o"
+  "CMakeFiles/bt_core.dir/ipc/shmem.c.o"
+  "CMakeFiles/bt_core.dir/md/market_data.c.o"
+  "CMakeFiles/bt_core.dir/net/gateway.c.o"
+  "CMakeFiles/bt_core.dir/persistence/journal.c.o"
+  "CMakeFiles/bt_core.dir/utils/cpu_affinity.c.o"
+  "CMakeFiles/bt_core.dir/utils/hugepage.c.o"
+  "CMakeFiles/bt_core.dir/utils/logger.c.o"
+  "CMakeFiles/bt_core.dir/utils/memory_pool.c.o"
+  "CMakeFiles/bt_core.dir/utils/memory_tier.c.o"
+  "CMakeFiles/bt_core.dir/utils/numa.c.o"
+  "CMakeFiles/bt_core.dir/utils/slab_allocator.c.o"
+  "CMakeFiles/bt_core.dir/utils/timer.c.o"
+  "libbt_core.a"
+  "libbt_core.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/bt_core.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

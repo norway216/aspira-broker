@@ -16,6 +16,7 @@
 #include "bt_queues.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
+#include "bt_scheduler.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,6 +82,7 @@ typedef struct {
     int                   active_conns;
     pthread_t             thread;
     uint64_t              orders_received;
+    int sched_id;
 } gw_ctx_t;
 
 /* ── Ring-buffer helpers ───────────────────────────────────────────── */
@@ -317,7 +319,7 @@ static void gw_accept(gw_ctx_t *ctx) {
 
 static void *gw_thread_core(void *arg) {
     gw_ctx_t *ctx = (gw_ctx_t *)arg;
-    bt_cpu_pin_thread(ctx->cpu_core); bt_cpu_set_realtime(60);
+    bt_sched_apply(&g_sched, ctx->sched_id);
     fprintf(stderr, "[gateway-%d] port %d, core %d\n", ctx->thread_id, ctx->port, ctx->cpu_core);
     struct epoll_event events[256];
     while (__atomic_load_n(&ctx->running, __ATOMIC_RELAXED)) {
@@ -372,12 +374,12 @@ static void *gw_thread_core(void *arg) {
 }
 
 /* ── Public API ────────────────────────────────────────────────────── */
-gw_ctx_t *bt_gateway_create(int tid, int cpu, int port, int max_conns,
+gw_ctx_t *bt_gateway_create(int tid, int cpu, int port, int max_conns, int sched_id,
                              bt_gw_oms_queue_t *out,
                              bt_gw_response_queue_t *response_queue) {
     gw_ctx_t *ctx = (gw_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx) return NULL;
-    ctx->thread_id = tid; ctx->cpu_core = cpu; ctx->port = port; ctx->max_conns = max_conns;
+    ctx->thread_id = tid; ctx->cpu_core = cpu; ctx->sched_id = sched_id; ctx->port = port; ctx->max_conns = max_conns;
     ctx->out_queue = out; ctx->response_queue = response_queue;
     __atomic_store_n(&ctx->running, 1, __ATOMIC_RELAXED);
     ctx->conns = (gw_conn_t *)calloc((size_t)max_conns, sizeof(gw_conn_t));

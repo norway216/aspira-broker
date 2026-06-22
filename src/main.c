@@ -9,6 +9,7 @@
 #include "bt_risk.h"
 #include "bt_matching.h"
 #include "bt_recovery.h"
+#include "bt_scheduler.h"
 #include "bt_timer.h"
 #include "bt_cpu.h"
 #include "bt_memory_pool.h"
@@ -50,6 +51,7 @@ typedef struct bt_md_ctx_t bt_md_ctx_t;
 
 /* Gateway */
 gw_ctx_t *bt_gateway_create(int tid, int cpu, int port, int max_conns,
+                              int sched_id,
                               bt_gw_oms_queue_t *out,
                               bt_gw_response_queue_t *response_queue);
 int  bt_gateway_start(gw_ctx_t *ctx);
@@ -57,7 +59,7 @@ void bt_gateway_stop(gw_ctx_t *ctx);
 void bt_gateway_destroy(gw_ctx_t *ctx);
 
 /* Market Data */
-bt_md_ctx_t *bt_md_create(int tid, int cpu, bt_md_tick_queue_t *in);
+bt_md_ctx_t *bt_md_create(int tid, int cpu, bt_md_tick_queue_t *in, int sched_id);
 int  bt_md_start(bt_md_ctx_t *ctx);
 void bt_md_stop(bt_md_ctx_t *ctx);
 void bt_md_destroy(bt_md_ctx_t *ctx);
@@ -140,17 +142,49 @@ int main(int argc, char **argv)
     if (g_cfg.risk_threads < 1 || g_cfg.risk_threads > 8) {
         fprintf(stderr, "FATAL: risk_threads must be 1-8\n"); return 1;
     }
-    /* num_shards must be a power of 2 for bitmask routing */
     if ((g_cfg.matching_threads & (g_cfg.matching_threads - 1)) != 0) {
         fprintf(stderr, "FATAL: matching_threads must be a power of 2\n"); return 1;
     }
-    /* Generate CPU core assignments algorithmically to avoid out-of-bounds */
+
+    /* Generate core assignments algorithmically */
     for (int i = 0; i < g_cfg.matching_threads; i++)
         g_cfg.cpu_match_cores[i] = g_cfg.cpu_start_core + 6 + i;
     for (int i = 0; i < g_cfg.risk_threads; i++)
         g_cfg.cpu_risk_cores[i] = g_cfg.cpu_start_core + 4 + i;
     g_cfg.cpu_io_cores[0] = g_cfg.cpu_start_core + 2;
     g_cfg.cpu_io_cores[1] = g_cfg.cpu_start_core + 3;
+
+    /* ── V9 Scheduler Init ─────────────────────────────────────────── */
+    bt_sched_init(&g_sched);
+
+    /* Register all threads with class, core, priority, budget */
+    int sched_gw  = bt_sched_register(&g_sched, "gateway",
+        BT_THREAD_CLASS_WARM, g_cfg.cpu_io_cores[0], 60, 200000);
+    int sched_og  = bt_sched_register(&g_sched, "ordergate",
+        BT_THREAD_CLASS_WARM, g_cfg.cpu_io_cores[1], 55, 100000);
+    int sched_oms = bt_sched_register(&g_sched, "oms",
+        BT_THREAD_CLASS_WARM, g_cfg.cpu_risk_cores[0] - 1, 70, 200000);
+    int sched_seq = bt_sched_register(&g_sched, "sequencer",
+        BT_THREAD_CLASS_HOT,  11, 85, 5000);
+    int sched_md  = bt_sched_register(&g_sched, "marketdata",
+        BT_THREAD_CLASS_WARM, g_cfg.cpu_match_cores[3] + 1, 50, 100000);
+    int sched_clr = bt_sched_register(&g_sched, "clearing",
+        BT_THREAD_CLASS_COLD, 13, 30, 0);
+
+    int sched_risk[8], sched_match[8];
+    for (int i = 0; i < g_cfg.risk_threads; i++) {
+        char name[32]; snprintf(name, sizeof(name), "risk-%d", i);
+        sched_risk[i] = bt_sched_register(&g_sched, name,
+            BT_THREAD_CLASS_WARM, g_cfg.cpu_risk_cores[i], 80, 50000);
+    }
+    for (int i = 0; i < g_cfg.matching_threads; i++) {
+        char name[32]; snprintf(name, sizeof(name), "match-%d", i);
+        sched_match[i] = bt_sched_register(&g_sched, name,
+            BT_THREAD_CLASS_HOT, g_cfg.cpu_match_cores[i], 90, 10000);
+    }
+
+    /* Validate: check collisions, NUMA mixing */
+    bt_sched_validate(&g_sched);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa)); sa.sa_handler = sig_handler;
@@ -160,6 +194,7 @@ int main(int argc, char **argv)
     bt_log_init();
     bt_timer_ticks_per_ns();
     print_banner();
+    bt_sched_print_map(&g_sched);
 
     /* ── Memory pool ────────────────────────────────────────────────── */
     size_t pool_sz = g_cfg.mempool_size_mb * 1024UL * 1024UL;
@@ -212,11 +247,11 @@ int main(int argc, char **argv)
     /* ── Start subsystems (consumers first, downstream → upstream) ──── */
 
     /* 1. Clearing (V5: NEW — subscribes to event bus) */
-    g_clearing = bt_clearing_create(0, 13);
+    g_clearing = bt_clearing_create(0, 13, sched_clr);
     if (g_clearing) bt_clearing_start(g_clearing, g_event_bus);
 
     /* 2. Market Data */
-    g_md = bt_md_create(0, g_cfg.cpu_match_cores[3] + 1, &g_md_q[0]);
+    g_md = bt_md_create(0, g_cfg.cpu_match_cores[3] + 1, &g_md_q[0], sched_md);
     if (g_md) bt_md_start(g_md);
 
     /* 3. Matching Engines (V5: + event_bus) */
@@ -226,17 +261,18 @@ int main(int argc, char **argv)
                                             &g_match_in_q[i], &g_md_q[i],
                                             arena, g_journal, g_event_bus,
                                             &g_response_q);
-        if (g_matchers[i]) bt_matching_start(g_matchers[i]);
+        if (g_matchers[i]) { bt_matching_start(g_matchers[i]); }
     }
 
     /* 4. Sequencer */
-    g_sequencer = bt_sequencer_create(0, 11);
+    g_sequencer = bt_sequencer_create(0, 11, sched_seq);
     if (!g_sequencer) {
         fprintf(stderr, "FATAL: sequencer init failed\n"); return 1;
     }
     {
         for (int i = 0; i < g_cfg.matching_threads; i++)
             g_seq_out_queues[i] = &g_match_in_q[i];
+        
         bt_sequencer_start(g_sequencer, &g_seq_in_q, g_seq_out_queues,
                            g_cfg.matching_threads);
     }
@@ -247,24 +283,25 @@ int main(int argc, char **argv)
                                                    &g_risk_in_q, &g_seq_in_q,
                                                    g_cfg.matching_threads,
                                                    g_risk_state);
-        if (g_risk_workers[i]) bt_risk_worker_start(g_risk_workers[i]);
+        if (g_risk_workers[i]) { bt_risk_worker_start(g_risk_workers[i]); }
     }
 
     /* 6. OMS */
-    g_oms = bt_oms_create(0, g_cfg.cpu_risk_cores[0] - 1, &g_gate_oms_q, &g_risk_in_q);
+    g_oms = bt_oms_create(0, g_cfg.cpu_risk_cores[0] - 1, &g_gate_oms_q, &g_risk_in_q, sched_oms);
     if (g_oms) bt_oms_start(g_oms);
 
     /* 7. Order Gate (V5: NEW — between Gateway and OMS) */
-    g_ordergate = bt_order_gate_create(0, 2);
+    g_ordergate = bt_order_gate_create(0, 2, sched_og);
     if (g_ordergate) {
+        
         bt_order_gate_start(g_ordergate, &g_gate_out_q, &g_gate_oms_q,
                             BT_CFG_OMS_QUEUE_CAP);
     }
 
     /* 8. Gateway (V5: outputs to Order Gate, not directly to OMS) */
     g_gateway = bt_gateway_create(0, g_cfg.cpu_io_cores[0], g_cfg.gateway_port,
-                                   g_cfg.max_connections, &g_gate_out_q,
-                                   &g_response_q);
+                                   g_cfg.max_connections, sched_gw,
+                                   &g_gate_out_q, &g_response_q);
     if (g_gateway) bt_gateway_start(g_gateway);
 
     BT_LOG_INFO("V5 pipeline: GW→Gate→OMS→Risk→Seq→Match×%d→MD→EventBus→Clearing",
@@ -304,6 +341,7 @@ int main(int argc, char **argv)
             BT_LOG_INFO("V5 Gate: recv=%lu pass=%lu rej=%lu thr=%lu",
                          gate_recv, gate_pass, gate_rej, gate_thr);
             bt_log_flush();
+            bt_sched_print_latency(&g_sched);
             last_health = now;
         }
     }

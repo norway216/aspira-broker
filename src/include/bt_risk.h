@@ -59,6 +59,7 @@ typedef struct bt_risk_worker {
     int                  nout;
     pthread_t            thread;
     uint64_t             orders_processed;  /* __atomic_* access */
+  int sched_id;
 } bt_risk_worker_t;
 
 bt_risk_state_t  *bt_risk_state_create(void);

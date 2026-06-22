@@ -31,7 +31,7 @@ typedef struct bt_order_gate bt_order_gate_t;
  * @param cpu_core   CPU core to pin to
  * @return Gate handle, or NULL on failure
  */
-bt_order_gate_t *bt_order_gate_create(int thread_id, int cpu_core);
+bt_order_gate_t *bt_order_gate_create(int thread_id, int cpu_core, int sched_id);
 
 /**
  * Start the order gate thread.
