@@ -6,18 +6,26 @@
 
 #IncludeRegexTransform: 
 
-/home/sa/Lab/Programming/aspira-broker/src/core/oms.c
-bt_oms.h
-/home/sa/Lab/Programming/aspira-broker/src/core/bt_oms.h
+/home/sa/Lab/Programming/aspira-broker/src/core/sequencer.c
+bt_sequencer.h
+/home/sa/Lab/Programming/aspira-broker/src/core/bt_sequencer.h
+bt_queues.h
+/home/sa/Lab/Programming/aspira-broker/src/core/bt_queues.h
+bt_journal.h
+/home/sa/Lab/Programming/aspira-broker/src/core/bt_journal.h
 bt_cpu.h
 /home/sa/Lab/Programming/aspira-broker/src/core/bt_cpu.h
 bt_scheduler.h
 /home/sa/Lab/Programming/aspira-broker/src/core/bt_scheduler.h
 bt_logger.h
 /home/sa/Lab/Programming/aspira-broker/src/core/bt_logger.h
+stdatomic.h
+-
 stdlib.h
 -
 stdio.h
+-
+pthread.h
 -
 
 include/bt_config.h
@@ -30,6 +38,14 @@ include/bt_cpu.h
 stdint.h
 -
 pthread.h
+-
+
+include/bt_journal.h
+bt_types.h
+include/bt_types.h
+stdint.h
+-
+stddef.h
 -
 
 include/bt_lockfree_queue.h
@@ -48,14 +64,6 @@ atomic
 
 include/bt_logger.h
 
-include/bt_oms.h
-bt_types.h
-include/bt_types.h
-bt_queues.h
-include/bt_queues.h
-pthread.h
--
-
 include/bt_queues.h
 bt_types.h
 include/bt_types.h
@@ -72,6 +80,16 @@ include/bt_timer.h
 pthread.h
 -
 stdio.h
+-
+
+include/bt_sequencer.h
+bt_types.h
+include/bt_types.h
+bt_config.h
+include/bt_config.h
+bt_journal.h
+include/bt_journal.h
+stdint.h
 -
 
 include/bt_timer.h

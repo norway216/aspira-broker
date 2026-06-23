@@ -3,6 +3,7 @@
 
 #include "bt_types.h"
 #include "bt_config.h"
+#include "bt_journal.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -36,7 +37,7 @@ typedef struct bt_sequencer bt_sequencer_t;
  * @param cpu_core    CPU core to pin to
  * @return Sequencer handle, or NULL on failure
  */
-bt_sequencer_t *bt_sequencer_create(int thread_id, int cpu_core, int sched_id);
+bt_sequencer_t *bt_sequencer_create(int thread_id, int cpu_core, int sched_id, bt_journal_t *journal);
 
 /**
  * Start the sequencer thread.

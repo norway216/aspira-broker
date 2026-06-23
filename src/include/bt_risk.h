@@ -44,9 +44,6 @@ typedef struct bt_risk_state {
     bt_risk_user_exposure_t *user_exposures;
     int                  num_user_exposures;
     int                  max_user_exposures;
-    /* V11: Idempotency ring (shared across workers) */
-    uint64_t             idem_ring[4096];
-    int                  idem_idx;
     /* Per-symbol positions */
     bt_risk_position_t  *positions;
     int                  num_positions;
