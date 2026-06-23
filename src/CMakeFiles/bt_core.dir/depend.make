@@ -86,6 +86,7 @@ CMakeFiles/bt_core.dir/core/scheduler.c.o: include/bt_types.h
 CMakeFiles/bt_core.dir/core/sequencer.c.o: core/sequencer.c
 CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_config.h
 CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_cpu.h
+CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_journal.h
 CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_lockfree_queue.h
 CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_logger.h
 CMakeFiles/bt_core.dir/core/sequencer.c.o: include/bt_queues.h

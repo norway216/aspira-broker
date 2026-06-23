@@ -165,7 +165,7 @@ int main(int argc, char **argv)
     int sched_og  = bt_sched_register(&g_sched, "ordergate",
         BT_THREAD_CLASS_WARM, g_cfg.cpu_io_cores[1], 55, 100000);
     int sched_oms __attribute__((unused)) = bt_sched_register(&g_sched, "oms",
-        BT_THREAD_CLASS_WARM, g_cfg.cpu_risk_cores[0] - 1, 70, 200000);
+        BT_THREAD_CLASS_WARM, 10, 70, 200000);
     int sched_seq = bt_sched_register(&g_sched, "sequencer",
         BT_THREAD_CLASS_HOT,  11, 85, 5000);
     int sched_md  = bt_sched_register(&g_sched, "marketdata",
@@ -271,7 +271,7 @@ int main(int argc, char **argv)
     }
 
     /* 4. Sequencer */
-    g_sequencer = bt_sequencer_create(0, 11, sched_seq);
+    g_sequencer = bt_sequencer_create(0, 11, sched_seq, g_journal);
     if (!g_sequencer) {
         fprintf(stderr, "FATAL: sequencer init failed\n"); return 1;
     }
@@ -293,7 +293,7 @@ int main(int argc, char **argv)
     }
 
     /* 6. OMS */
-    g_oms = bt_oms_create(0, g_cfg.cpu_risk_cores[0] - 1, &g_gate_oms_q, &g_risk_in_q, sched_oms);
+    g_oms = bt_oms_create(0, 10, &g_gate_oms_q, &g_risk_in_q, sched_oms);
     if (g_oms) bt_oms_start(g_oms);
 
     /* 7. Order Gate (V5: NEW — between Gateway and OMS) */

@@ -87,6 +87,7 @@ CMakeFiles/bt_core.dir/core/sequencer.c.o
  /home/sa/Lab/Programming/aspira-broker/src/core/sequencer.c
  include/bt_config.h
  include/bt_cpu.h
+ include/bt_journal.h
  include/bt_lockfree_queue.h
  include/bt_logger.h
  include/bt_queues.h

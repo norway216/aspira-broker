@@ -215,6 +215,8 @@ bt_types.h
 include/bt_types.h
 bt_config.h
 include/bt_config.h
+bt_journal.h
+include/bt_journal.h
 stdint.h
 -
 
